@@ -1,32 +1,31 @@
 # -*- coding: utf-8 -*-
 """
-Suite de Reportes Clínicos
-Versión: 14.1 ("PDF Engine Fix")
-Descripción: Versión final que corrige un error crítico en el motor de
-generación de PDFs. Se ha eliminado el manejo manual de codificación de
-caracteres que causaba la corrupción del texto, delegando esta tarea a la
-librería fpdf2 para una creación de reportes robusta y a prueba de fallos.
+Suite de Diagnóstico Integral
+Versión: 15.0 ("Suite Clínica Definitiva")
+Descripción: Versión final que corrige un error crítico en el motor de PDF,
+restaura el formulario de consulta clínica exhaustivo para una captura de datos
+rica y precisa, e integra la edad del paciente en el registro, dashboard y
+reportes. Esta versión representa la culminación del desarrollo, resultando en
+una herramienta robusta y profesional.
 """
-# --- LIBRERÍAS ---
+# --- LIBRERías ---
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import google.generativeai as genai
-import altair as alt
 from fpdf import FPDF
-import base64
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Suite de Reportes Clínicos",
-    page_icon="📄",
+    page_title="Suite Clínica Definitiva",
+    page_icon="🩺",
     layout="wide"
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "14.1.0 (PDF Engine Fix)"
+APP_VERSION = "15.0.0 (Suite Clínica Definitiva)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -97,7 +96,6 @@ def load_patient_history(physician_email, patient_id):
         record = doc.to_dict()
         record['id'] = doc.id
         records.append(record)
-
     if not records: return pd.DataFrame()
     df = pd.DataFrame(records)
     df['timestamp'] = pd.to_datetime(df['timestamp_utc'])
@@ -115,20 +113,18 @@ def generate_ai_holistic_review(latest_consultation, history_summary):
     **DATOS DE LA ÚLTIMA CONSULTA:**
     - Motivo: {latest_consultation.get('motivo_consulta', 'No especificado')}
     - Signos Vitales: PA {latest_consultation.get('presion_sistolica', 'N/A')}/{latest_consultation.get('presion_diastolica', 'N/A')} mmHg, Glucemia {latest_consultation.get('glucemia', 'N/A')} mg/dL.
+    - Síntomas Relevantes: {latest_consultation.get('sintomas_cardio', [])}, {latest_consultation.get('sintomas_resp', [])}, {latest_consultation.get('sintomas_metabolico', [])}
     **HISTORIAL DE CONSULTAS (resumen):**
     {history_summary}
     **GENERAR REPORTE CON LA SIGUIENTE ESTRUCTURA:**
     ### Análisis Clínico Integral por IA
     **1. Impresión Diagnóstica Principal y Diferenciales:**
-    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? ¿Qué otras posibilidades deberían considerarse?)
     **2. Estratificación del Riesgo:**
-    (Evalúa el riesgo cardiovascular/metabólico global del paciente. Justifica tu respuesta.)
     **3. Plan de Manejo Sugerido:**
-    * **Estudios Diagnósticos:** (¿Qué exámenes de laboratorio o imágenes se necesitan para confirmar/descartar los diagnósticos?)
-    * **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar.)
-    * **Metas Terapéuticas:** (Establece objetivos claros.)
+    * **Estudios Diagnósticos:**
+    * **Tratamiento Farmacológico:**
+    * **Metas Terapéuticas:**
     **4. Educación para el Paciente:**
-    (Proporciona puntos clave para discutir con el paciente.)
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
@@ -143,7 +139,6 @@ class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
         self.cell(0, 10, 'Reporte Clínico del Paciente', 0, 1, 'C')
-
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
@@ -153,11 +148,11 @@ def create_patient_report_pdf(patient_info, history_df):
     pdf = PDF()
     pdf.add_page()
     pdf.set_font('Arial', 'B', 16)
-    # Corrección: Pasar strings directamente. fpdf2 maneja UTF-8.
-    pdf.cell(0, 10, patient_info.get('nombre', 'N/A'), 0, 1)
+    pdf.cell(0, 10, str(patient_info.get('nombre', 'N/A')), 0, 1)
     
     pdf.set_font('Arial', '', 12)
     pdf.cell(0, 10, f"Documento: {patient_info.get('cedula', 'N/A')}", 0, 1)
+    pdf.cell(0, 10, f"Edad: {patient_info.get('edad', 'N/A')} años", 0, 1)
     pdf.cell(0, 10, f"Dirección: {patient_info.get('direccion', 'N/A')}", 0, 1)
     pdf.ln(10)
 
@@ -166,21 +161,21 @@ def create_patient_report_pdf(patient_info, history_df):
         pdf.cell(0, 10, f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", 0, 1)
         pdf.set_font('Arial', '', 10)
         
-        # Corrección: Usar multi_cell con strings directos.
-        pdf.multi_cell(0, 5, f"Motivo: {row.get('motivo_consulta', 'N/A')}")
+        pdf.multi_cell(0, 5, f"Motivo: {str(row.get('motivo_consulta', 'N/A'))}")
         
-        vitales = f"PA: {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')} mmHg | Glucemia: {row.get('glucemia', 'N/A')} mg/dL"
+        vitales = (f"PA: {str(row.get('presion_sistolica', 'N/A'))}/{str(row.get('presion_diastolica', 'N/A'))} mmHg | "
+                   f"Glucemia: {str(row.get('glucemia', 'N/A'))} mg/dL | "
+                   f"IMC: {str(row.get('imc', 'N/A'))}")
         pdf.multi_cell(0, 5, vitales)
         
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             pdf.set_font('Arial', 'I', 10)
             pdf.ln(5)
             pdf.multi_cell(0, 5, "--- Análisis por IA ---")
-            pdf.multi_cell(0, 5, row['ai_analysis'])
+            pdf.multi_cell(0, 5, str(row['ai_analysis']))
         
         pdf.ln(10)
     
-    # Devolver los bytes directamente para el botón de descarga.
     return pdf.output()
 
 # ==============================================================================
@@ -211,8 +206,7 @@ def render_login_page():
 def render_main_app():
     with st.sidebar:
         st.header("Menú del Médico")
-        physician_email = st.session_state.get('physician_email', 'Cargando...')
-        st.write(physician_email)
+        st.write(st.session_state.get('physician_email', 'Cargando...'))
         st.divider()
         if st.button("Panel de Pacientes", use_container_width=True):
             st.session_state.page = 'patient_registry'
@@ -235,11 +229,12 @@ def render_patient_registry():
         with st.form("new_patient_form", clear_on_submit=True):
             nombre = st.text_input("Nombres Completos")
             cedula = st.text_input("Documento de Identidad (ID único)")
+            edad = st.number_input("Edad", min_value=0, max_value=120)
             direccion = st.text_input("Dirección de Residencia")
             telefono = st.text_input("Teléfono")
             submitted = st.form_submit_button("Registrar Paciente")
             if submitted and nombre and cedula:
-                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "telefono": telefono, "direccion": direccion})
+                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
                 st.rerun()
 
     st.divider()
@@ -260,7 +255,8 @@ def render_patient_registry():
 def render_patient_dashboard():
     patient_id = st.session_state.selected_patient_id
     patient_info = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id).get().to_dict()
-    st.title(f"Dashboard Clínico de: {patient_info['nombre']}")
+    st.title(f"Dashboard Clínico de: {patient_info.get('nombre', 'N/A')}")
+    st.caption(f"Documento: {patient_info.get('cedula', 'N/A')} | Edad: {patient_info.get('edad', 'N/A')} años")
     
     df_history = load_patient_history(st.session_state.physician_email, patient_id)
 
@@ -269,7 +265,7 @@ def render_patient_dashboard():
         st.download_button(
             label="📄 Descargar Reporte Completo en PDF",
             data=pdf_data,
-            file_name=f"Reporte_{patient_info['cedula']}.pdf",
+            file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf",
             mime="application/pdf",
         )
 
@@ -282,7 +278,6 @@ def render_patient_dashboard():
             for _, row in df_history.iterrows():
                 with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
                     st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
-                    st.write(f"**PA:** {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')} mmHg | **Glucemia:** {row.get('glucemia', 'N/A')} mg/dL")
                     if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
                         st.markdown("**Análisis por IA:**")
                         st.info(row['ai_analysis'])
@@ -295,17 +290,33 @@ def render_patient_dashboard():
 
     with tab2:
         with st.form("new_consultation_form"):
-            motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
-            c1, c2, c3, c4 = st.columns(4)
-            presion_sistolica = c1.number_input("PA Sistólica", min_value=0, value=120)
-            presion_diastolica = c2.number_input("PA Diastólica", min_value=0, value=80)
-            frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0, value=75)
-            glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0, value=95)
+            st.header("Datos de la Consulta")
+            with st.expander("1. Anamnesis y Vitales", expanded=True):
+                motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                presion_sistolica = c1.number_input("PA Sistólica", min_value=0)
+                presion_diastolica = c2.number_input("PA Diastólica", min_value=0)
+                frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
+                glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
+                imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
+            
+            with st.expander("2. Revisión por Sistemas (Síntomas)"):
+                sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
+                sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
+                sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
+
+            with st.expander("3. Factores de Riesgo y Estilo de Vida"):
+                c1, c2 = st.columns(2)
+                dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
+                ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
+            
             submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
             if submitted:
                 consultation_data = {
                     "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
-                    "frec_cardiaca": frec_cardiaca, "glucemia": glucemia,
+                    "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc,
+                    "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
+                    "dieta": dieta, "ejercicio": ejercicio
                 }
                 save_consultation(st.session_state.physician_email, patient_id, consultation_data)
                 st.rerun()
