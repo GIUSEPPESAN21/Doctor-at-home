@@ -14,5 +14,5 @@ google-generativeai
 # Advanced Visualization
 altair
 
-# PDF Generation Library
-fpdf2
+# PDF Generation Library (NUEVA Y MEJORADA)
+reportlab
