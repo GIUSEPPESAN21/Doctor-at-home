@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 16.1 ("API Quota Management")
-Descripción: Versión final que introduce un manejo de estado inteligente para
-las llamadas a la API de IA. Desactiva el botón de "Generar Análisis" mientras
-una solicitud está en proceso, previniendo el error de "quota exceeded" (429)
-y mejorando la experiencia de usuario a un nivel profesional.
+Versión: 16.2 ("State Management Fix")
+Descripción: Versión final y estable que corrige un error crítico de
+AttributeError en la gestión de estado de la sesión. Se ha refactorizado la
+lógica de manejo de clics para el análisis de IA, asegurando una inicialización
+correcta de las variables y un seguimiento preciso de las acciones del usuario,
+resultando en una aplicación robusta y completamente funcional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -27,7 +28,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "16.1.0 (API Quota Management)"
+APP_VERSION = "16.2.0 (State Management Fix)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -56,11 +57,14 @@ def init_connections():
 
 DB, GEMINI_MODEL = init_connections()
 
+# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+    st.session_state.physician_email = None
     st.session_state.page = 'login'
     st.session_state.selected_patient_id = None
-    st.session_state.ai_analysis_running = False # Nuevo estado para el botón
+    st.session_state.ai_analysis_running = False
+    st.session_state.last_clicked_ai = None
 
 # ==============================================================================
 # MÓDULO 2: LÓGICA DE DATOS (FIRESTORE)
@@ -260,6 +264,20 @@ def render_patient_dashboard():
         if df_history.empty:
             st.info("Este paciente no tiene consultas.")
         else:
+            # --- LÓGICA DE ANÁLISIS DE IA CORREGIDA ---
+            # Se ejecuta fuera del bucle de renderizado para evitar conflictos
+            if st.session_state.ai_analysis_running:
+                consultation_id_to_process = st.session_state.last_clicked_ai
+                # Encontrar la fila de datos para esa consulta
+                row_to_process = df_history[df_history['id'] == consultation_id_to_process].iloc[0]
+                with st.spinner("Contactando al asistente de IA..."):
+                    history_summary = "..."
+                    ai_report = generate_ai_holistic_review(row_to_process.to_dict(), history_summary)
+                    update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id_to_process, ai_report)
+                st.session_state.ai_analysis_running = False
+                st.session_state.last_clicked_ai = None
+                st.rerun()
+
             for _, row in df_history.iterrows():
                 with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
                     st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
@@ -267,25 +285,15 @@ def render_patient_dashboard():
                         st.markdown("**Análisis por IA:**")
                         st.info(row['ai_analysis'])
                     else:
-                        # --- MEJORA: Desactivación inteligente del botón ---
-                        button_label = "Procesando IA..." if st.session_state.ai_analysis_running else "Generar Análisis con IA"
-                        if st.button(button_label, key=f"ai_{row['id']}", disabled=st.session_state.ai_analysis_running):
+                        button_label = "Generar Análisis con IA"
+                        button_key = f"ai_{row['id']}"
+                        if st.button(button_label, key=button_key, disabled=st.session_state.ai_analysis_running):
                             st.session_state.ai_analysis_running = True
-                            st.rerun() # Para mostrar el estado "Procesando..."
-                    
-                    # --- MEJORA: Lógica de ejecución del análisis ---
-                    if st.session_state.ai_analysis_running and st.session_state.get('last_clicked_ai') == f"ai_{row['id']}":
-                        with st.spinner("Contactando al asistente de IA..."):
-                            history_summary = "..."
-                            ai_report = generate_ai_holistic_review(row.to_dict(), history_summary)
-                            update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, row['id'], ai_report)
-                        st.session_state.ai_analysis_running = False
-                        del st.session_state.last_clicked_ai
-                        st.rerun()
+                            st.session_state.last_clicked_ai = row['id']
+                            st.rerun()
 
     with tab2:
         with st.form("new_consultation_form"):
-            # (El formulario de consulta no necesita cambios)
             st.header("Datos de la Consulta")
             with st.expander("1. Anamnesis y Vitales", expanded=True):
                 motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
@@ -295,14 +303,17 @@ def render_patient_dashboard():
                 frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
                 glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
                 imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
+            
             with st.expander("2. Revisión por Sistemas (Síntomas)"):
                 sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
                 sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
                 sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
+
             with st.expander("3. Factores de Riesgo y Estilo de Vida"):
                 c1, c2 = st.columns(2)
                 dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
                 ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
+            
             submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
             if submitted:
                 consultation_data = {
