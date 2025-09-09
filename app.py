@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Reportes Clínicos
-Versión: 1.0 ("Clinical Reporting Suite")
-Descripción: Esta versión transforma la aplicación en una completa herramienta de
-documentación clínica. Se introduce la generación de reportes en PDF exhaustivos,
-la persistencia permanente de los análisis de IA en la base de datos junto a su
-consulta correspondiente, y se enriquece el perfil del paciente con nuevos campos.
+Versión: 14.1 ("PDF Engine Fix")
+Descripción: Versión final que corrige un error crítico en el motor de
+generación de PDFs. Se ha eliminado el manejo manual de codificación de
+caracteres que causaba la corrupción del texto, delegando esta tarea a la
+librería fpdf2 para una creación de reportes robusta y a prueba de fallos.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "14.0.0 (Clinical Reporting Suite)"
+APP_VERSION = "14.1.0 (PDF Engine Fix)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -143,6 +143,7 @@ class PDF(FPDF):
     def header(self):
         self.set_font('Arial', 'B', 12)
         self.cell(0, 10, 'Reporte Clínico del Paciente', 0, 1, 'C')
+
     def footer(self):
         self.set_y(-15)
         self.set_font('Arial', 'I', 8)
@@ -152,6 +153,7 @@ def create_patient_report_pdf(patient_info, history_df):
     pdf = PDF()
     pdf.add_page()
     pdf.set_font('Arial', 'B', 16)
+    # Corrección: Pasar strings directamente. fpdf2 maneja UTF-8.
     pdf.cell(0, 10, patient_info.get('nombre', 'N/A'), 0, 1)
     
     pdf.set_font('Arial', '', 12)
@@ -164,20 +166,22 @@ def create_patient_report_pdf(patient_info, history_df):
         pdf.cell(0, 10, f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", 0, 1)
         pdf.set_font('Arial', '', 10)
         
-        pdf.multi_cell(0, 5, f"Motivo: {row.get('motivo_consulta', 'N/A')}".encode('latin-1', 'replace').decode('latin-1'))
+        # Corrección: Usar multi_cell con strings directos.
+        pdf.multi_cell(0, 5, f"Motivo: {row.get('motivo_consulta', 'N/A')}")
         
         vitales = f"PA: {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')} mmHg | Glucemia: {row.get('glucemia', 'N/A')} mg/dL"
-        pdf.multi_cell(0, 5, vitales.encode('latin-1', 'replace').decode('latin-1'))
+        pdf.multi_cell(0, 5, vitales)
         
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             pdf.set_font('Arial', 'I', 10)
             pdf.ln(5)
-            pdf.multi_cell(0, 5, "--- Análisis por IA ---".encode('latin-1', 'replace').decode('latin-1'))
-            pdf.multi_cell(0, 5, row['ai_analysis'].encode('latin-1', 'replace').decode('latin-1'))
+            pdf.multi_cell(0, 5, "--- Análisis por IA ---")
+            pdf.multi_cell(0, 5, row['ai_analysis'])
         
         pdf.ln(10)
     
-    return pdf.output(dest='S').encode('latin-1')
+    # Devolver los bytes directamente para el botón de descarga.
+    return pdf.output()
 
 # ==============================================================================
 # MÓDULO 5: VISTAS Y COMPONENTES DE UI
@@ -284,7 +288,7 @@ def render_patient_dashboard():
                         st.info(row['ai_analysis'])
                     else:
                         if st.button("Generar Análisis con IA", key=f"ai_{row['id']}"):
-                            history_summary = "..." # Resumen simple para el prompt
+                            history_summary = "..."
                             ai_report = generate_ai_holistic_review(row.to_dict(), history_summary)
                             update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, row['id'], ai_report)
                             st.rerun()
@@ -317,3 +321,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
