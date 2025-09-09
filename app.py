@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 19.0 ("Control Panel UI")
-Descripción: Versión que implementa una reingeniería de la interfaz principal.
-Se introduce un "Panel de Control" con pestañas después del inicio de sesión,
-reemplazando el expandible por un formulario de registro de pacientes más
-accesible y mejorando significativamente el flujo de trabajo del médico.
+Versión: 20.0 ("Final UI Polish")
+Descripción: Versión final que refina la interfaz de usuario moviendo la
+sección "Acerca de" desde la página de login a una nueva pestaña dedicada en
+el panel de control principal, logrando un diseño más limpio y profesional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -27,7 +26,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "19.0.0 (Control Panel UI)"
+APP_VERSION = "20.0.0 (Final UI Polish)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -199,54 +198,35 @@ def create_patient_report_pdf(patient_info, history_df):
 def render_login_page():
     st.title("Plataforma de Gestión Clínica")
     
-    col1, col2 = st.columns([1,1])
-    
-    with col1:
-        with st.form("login_form"):
-            email = st.text_input("Correo Electrónico del Médico")
-            password = st.text_input("Contraseña", type="password")
-            login_button = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
-            register_button = st.form_submit_button("Registrarse", use_container_width=True)
-            
-        if login_button:
-            try:
-                user = auth.get_user_by_email(email)
-                st.session_state.logged_in = True
-                st.session_state.physician_email = user.email
-                st.session_state.page = 'control_panel' # CAMBIO: Nueva página de inicio
-                st.rerun()
-            except Exception as e: st.error(f"Error de inicio de sesión: {e}")
-        if register_button:
-            try:
-                user = auth.create_user(email=email, password=password)
-                st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
-            except Exception as e: st.error(f"Error de registro: {e}")
-
-    with col2:
-        st.markdown("### Acerca de esta Herramienta")
-        st.info(f"**Versión:** {APP_VERSION}")
-        st.markdown(
-            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
-            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
-            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
-        )
-        st.divider()
-        st.markdown("##### Autor")
-        st.write("**Joseph Javier Sánchez Acuña**")
-        st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
-        st.markdown("---")
-        st.markdown("##### Contacto")
-        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
-        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
-        st.write("📧 joseph.sanchez@uniminuto.edu.co")
+    # --- CAMBIO: Formulario de login centrado y sin columnas ---
+    with st.container(border=True):
+      with st.form("login_form"):
+          email = st.text_input("Correo Electrónico del Médico")
+          password = st.text_input("Contraseña", type="password")
+          login_button = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
+          register_button = st.form_submit_button("Registrarse", use_container_width=True)
+          
+      if login_button:
+          try:
+              user = auth.get_user_by_email(email)
+              st.session_state.logged_in = True
+              st.session_state.physician_email = user.email
+              st.session_state.page = 'control_panel'
+              st.rerun()
+          except Exception as e: st.error(f"Error de inicio de sesión: {e}")
+      if register_button:
+          try:
+              user = auth.create_user(email=email, password=password)
+              st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
+          except Exception as e: st.error(f"Error de registro: {e}")
 
 def render_main_app():
     with st.sidebar:
         st.header("Menú del Médico")
         st.write(st.session_state.get('physician_email', 'Cargando...'))
         st.divider()
-        if st.button("Panel de Control", use_container_width=True): # CAMBIO: Texto del botón
-            st.session_state.page = 'control_panel' # CAMBIO: Apunta al nuevo panel
+        if st.button("Panel de Control", use_container_width=True):
+            st.session_state.page = 'control_panel'
             st.session_state.selected_patient_id = None
             st.rerun()
         st.divider()
@@ -255,7 +235,6 @@ def render_main_app():
             st.rerun()
         st.info(f"**Versión:** {APP_VERSION}")
         
-    # CAMBIO: Nueva lógica de enrutamiento
     if st.session_state.page == 'control_panel':
         render_control_panel()
     elif st.session_state.page == 'patient_dashboard':
@@ -264,7 +243,8 @@ def render_main_app():
 def render_control_panel():
     st.title("Panel de Control Médico")
 
-    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "⚙️ Configuración (Próximamente)"])
+    # --- CAMBIO: Nueva pestaña "Acerca de" ---
+    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
 
     with tab1:
         st.header("Registrar Nuevo Paciente")
@@ -295,8 +275,24 @@ def render_control_panel():
                     st.session_state.page = 'patient_dashboard'
                     st.rerun()
 
+    # --- CAMBIO: Contenido movido a la nueva pestaña ---
     with tab2:
-        st.info("Esta sección contendrá futuras opciones de configuración de la cuenta del médico.")
+        st.markdown("### Acerca de esta Herramienta")
+        st.info(f"**Versión:** {APP_VERSION}")
+        st.markdown(
+            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
+            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
+            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
+        )
+        st.divider()
+        st.markdown("##### Autor")
+        st.write("**Joseph Javier Sánchez Acuña**")
+        st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
+        st.markdown("---")
+        st.markdown("##### Contacto")
+        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+        st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
 def render_patient_dashboard():
     patient_id = st.session_state.selected_patient_id
