@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 18.0 ("UI Refinement")
-Descripción: Versión final que mejora la experiencia de usuario reubicando la
-sección "Acerca del Autor" desde la barra lateral a la página de inicio de
-sesión, logrando una interfaz de trabajo más limpia y profesional.
+Versión: 19.0 ("Control Panel UI")
+Descripción: Versión que implementa una reingeniería de la interfaz principal.
+Se introduce un "Panel de Control" con pestañas después del inicio de sesión,
+reemplazando el expandible por un formulario de registro de pacientes más
+accesible y mejorando significativamente el flujo de trabajo del médico.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -26,7 +27,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "18.0.0 (UI Refinement)"
+APP_VERSION = "19.0.0 (Control Panel UI)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -142,13 +143,13 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_su
     (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica tu respuesta basándote en los datos.)
 
     **4. PLAN DE MANEJO SUGERIDO:**
-    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos. Sé específico, ej: "Hemoglobina Glicosilada (HbA1c)", "Perfil Lipídico Completo", "Electrocardiograma (EKG) de 12 derivaciones".)
-    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida. Ej: "Iniciar plan de alimentación tipo DASH", "Aumentar actividad física aeróbica a 150 min/semana".)
-    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica. Ej: "Considerar inicio de terapia antihipertensiva con IECA/ARA-II", "Evaluar necesidad de estatina de moderada intensidad.")
-    - **Metas Terapéuticas:** (Establece objetivos numéricos claros. Ej: "Meta de PA < 130/80 mmHg", "Meta de HbA1c < 7.0%")
+    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos.)
+    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida.)
+    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica.)
+    - **Metas Terapéuticas:** (Establece objetivos numéricos claros.)
 
     **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
-    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente. Ej: "Explicar la relación entre el peso y la presión arterial", "Importancia de la monitorización de la presión en casa".)
+    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente.)
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
@@ -212,7 +213,7 @@ def render_login_page():
                 user = auth.get_user_by_email(email)
                 st.session_state.logged_in = True
                 st.session_state.physician_email = user.email
-                st.session_state.page = 'patient_registry'
+                st.session_state.page = 'control_panel' # CAMBIO: Nueva página de inicio
                 st.rerun()
             except Exception as e: st.error(f"Error de inicio de sesión: {e}")
         if register_button:
@@ -229,7 +230,6 @@ def render_login_page():
             "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
             "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
         )
-        # --- SECCIÓN DEL AUTOR REUBICADA ---
         st.divider()
         st.markdown("##### Autor")
         st.write("**Joseph Javier Sánchez Acuña**")
@@ -245,8 +245,8 @@ def render_main_app():
         st.header("Menú del Médico")
         st.write(st.session_state.get('physician_email', 'Cargando...'))
         st.divider()
-        if st.button("Panel de Pacientes", use_container_width=True):
-            st.session_state.page = 'patient_registry'
+        if st.button("Panel de Control", use_container_width=True): # CAMBIO: Texto del botón
+            st.session_state.page = 'control_panel' # CAMBIO: Apunta al nuevo panel
             st.session_state.selected_patient_id = None
             st.rerun()
         st.divider()
@@ -255,39 +255,48 @@ def render_main_app():
             st.rerun()
         st.info(f"**Versión:** {APP_VERSION}")
         
-    if st.session_state.page == 'patient_registry':
-        render_patient_registry()
+    # CAMBIO: Nueva lógica de enrutamiento
+    if st.session_state.page == 'control_panel':
+        render_control_panel()
     elif st.session_state.page == 'patient_dashboard':
         render_patient_dashboard()
 
-def render_patient_registry():
-    st.title("Panel de Control de Pacientes")
-    with st.expander("➕ Registrar Nuevo Paciente", expanded=False):
+def render_control_panel():
+    st.title("Panel de Control Médico")
+
+    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "⚙️ Configuración (Próximamente)"])
+
+    with tab1:
+        st.header("Registrar Nuevo Paciente")
         with st.form("new_patient_form", clear_on_submit=True):
-            nombre = st.text_input("Nombres Completos")
-            cedula = st.text_input("Documento de Identidad (ID único)")
-            edad = st.number_input("Edad", min_value=0, max_value=120)
+            c1, c2, c3 = st.columns(3)
+            nombre = c1.text_input("Nombres Completos")
+            cedula = c2.text_input("Documento de Identidad (ID único)")
+            edad = c3.number_input("Edad", min_value=0, max_value=120)
             direccion = st.text_input("Dirección de Residencia")
             telefono = st.text_input("Teléfono")
-            submitted = st.form_submit_button("Registrar Paciente")
+            submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
             if submitted and nombre and cedula:
                 save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
                 st.rerun()
+        
+        st.divider()
+        st.header("Seleccionar Paciente Existente")
+        patients = get_physician_patients(st.session_state.physician_email)
+        if not patients:
+            st.info("No hay pacientes registrados. Agregue uno nuevo para comenzar.")
+        else:
+            for patient in patients:
+                col1, col2, col3 = st.columns([3, 2, 1])
+                col1.subheader(patient['nombre'])
+                col2.text(f"ID: {patient['cedula']}")
+                if col3.button("Ver Historial", key=patient['id'], use_container_width=True):
+                    st.session_state.selected_patient_id = patient['id']
+                    st.session_state.page = 'patient_dashboard'
+                    st.rerun()
 
-    st.divider()
-    st.header("Seleccionar Paciente")
-    patients = get_physician_patients(st.session_state.physician_email)
-    if not patients:
-        st.info("No hay pacientes registrados.")
-    else:
-        for patient in patients:
-            col1, col2, col3 = st.columns([3, 2, 1])
-            col1.subheader(patient['nombre'])
-            col2.text(f"ID: {patient['cedula']}")
-            if col3.button("Ver Historial", key=patient['id'], use_container_width=True):
-                st.session_state.selected_patient_id = patient['id']
-                st.session_state.page = 'patient_dashboard'
-                st.rerun()
+    with tab2:
+        st.info("Esta sección contendrá futuras opciones de configuración de la cuenta del médico.")
 
 def render_patient_dashboard():
     patient_id = st.session_state.selected_patient_id
