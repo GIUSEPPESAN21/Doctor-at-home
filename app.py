@@ -182,7 +182,11 @@ def render_login_page():
 def render_main_app():
     with st.sidebar:
         st.header("Menú del Médico")
-        st.write(st.session_state.physician_email)
+        # --- CORRECCIÓN AÑADIDA ---
+        # Se utiliza .get() para solicitar el email de forma segura y evitar el error
+        # si la página se recarga y el estado aún no está completamente sincronizado.
+        physician_email = st.session_state.get('physician_email', 'Cargando...')
+        st.write(physician_email)
         st.divider()
         if st.button("Registro de Pacientes", use_container_width=True):
             st.session_state.page = 'patient_registry'
@@ -291,4 +295,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
