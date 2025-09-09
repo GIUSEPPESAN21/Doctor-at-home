@@ -13,3 +13,6 @@ google-generativeai
 
 # Advanced Visualization
 altair
+
+# PDF Generation Library
+fpdf2
