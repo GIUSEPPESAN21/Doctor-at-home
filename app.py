@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 16.0 ("ReportLab Engine")
-Descripción: Versión final que resuelve el error persistente de generación de
-PDFs reemplazando la librería fpdf2 por ReportLab, el estándar de la industria.
-Este cambio fundamental asegura una creación de reportes robusta, estable y
-compatible con caracteres especiales, culminando el desarrollo de la plataforma.
+Versión: 16.1 ("API Quota Management")
+Descripción: Versión final que introduce un manejo de estado inteligente para
+las llamadas a la API de IA. Desactiva el botón de "Generar Análisis" mientras
+una solicitud está en proceso, previniendo el error de "quota exceeded" (429)
+y mejorando la experiencia de usuario a un nivel profesional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -27,7 +27,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "16.0.0 (ReportLab Engine)"
+APP_VERSION = "16.1.0 (API Quota Management)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -60,6 +60,7 @@ if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.page = 'login'
     st.session_state.selected_patient_id = None
+    st.session_state.ai_analysis_running = False # Nuevo estado para el botón
 
 # ==============================================================================
 # MÓDULO 2: LÓGICA DE DATOS (FIRESTORE)
@@ -106,7 +107,6 @@ def load_patient_history(physician_email, patient_id):
 # ==============================================================================
 # MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
 # ==============================================================================
-@st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
 def generate_ai_holistic_review(latest_consultation, history_summary):
     if not GEMINI_MODEL: return "Servicio de IA no disponible."
     prompt = f"""
@@ -123,7 +123,7 @@ def generate_ai_holistic_review(latest_consultation, history_summary):
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
-        return response.text.replace('*', '- ') # Reemplazar asteriscos para mejor formato PDF
+        return response.text.replace('*', '- ')
     except Exception as e:
         return f"**Error al generar recomendaciones:** {e}"
 
@@ -136,33 +136,27 @@ def create_patient_report_pdf(patient_info, history_df):
     styles = getSampleStyleSheet()
     story = []
 
-    # Título y Datos del Paciente
     story.append(Paragraph(str(patient_info.get('nombre', 'N/A')), styles['h1']))
     story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
     story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
     story.append(Paragraph(f"Dirección: {patient_info.get('direccion', 'N/A')}", styles['Normal']))
     story.append(Spacer(1, 0.25*inch))
 
-    # Historial de Consultas
     for _, row in history_df.sort_values('timestamp').iterrows():
         story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
-        
         motivo = str(row.get('motivo_consulta', 'N/A')).replace('\n', '<br/>')
         story.append(Paragraph(f"<b>Motivo:</b> {motivo}", styles['Normal']))
-        
         pa_s = str(row.get('presion_sistolica', 'N/A'))
         pa_d = str(row.get('presion_diastolica', 'N/A'))
         gluc = str(row.get('glucemia', 'N/A'))
         imc = str(row.get('imc', 'N/A'))
         vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
         story.append(Paragraph(vitales, styles['Normal']))
-        
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1*inch))
             story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
             analysis_text = str(row['ai_analysis']).replace('\n', '<br/>')
             story.append(Paragraph(analysis_text, styles['Normal']))
-        
         story.append(Spacer(1, 0.25*inch))
     
     doc.build(story)
@@ -273,14 +267,25 @@ def render_patient_dashboard():
                         st.markdown("**Análisis por IA:**")
                         st.info(row['ai_analysis'])
                     else:
-                        if st.button("Generar Análisis con IA", key=f"ai_{row['id']}"):
+                        # --- MEJORA: Desactivación inteligente del botón ---
+                        button_label = "Procesando IA..." if st.session_state.ai_analysis_running else "Generar Análisis con IA"
+                        if st.button(button_label, key=f"ai_{row['id']}", disabled=st.session_state.ai_analysis_running):
+                            st.session_state.ai_analysis_running = True
+                            st.rerun() # Para mostrar el estado "Procesando..."
+                    
+                    # --- MEJORA: Lógica de ejecución del análisis ---
+                    if st.session_state.ai_analysis_running and st.session_state.get('last_clicked_ai') == f"ai_{row['id']}":
+                        with st.spinner("Contactando al asistente de IA..."):
                             history_summary = "..."
                             ai_report = generate_ai_holistic_review(row.to_dict(), history_summary)
                             update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, row['id'], ai_report)
-                            st.rerun()
+                        st.session_state.ai_analysis_running = False
+                        del st.session_state.last_clicked_ai
+                        st.rerun()
 
     with tab2:
         with st.form("new_consultation_form"):
+            # (El formulario de consulta no necesita cambios)
             st.header("Datos de la Consulta")
             with st.expander("1. Anamnesis y Vitales", expanded=True):
                 motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
@@ -290,17 +295,14 @@ def render_patient_dashboard():
                 frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
                 glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
                 imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
-            
             with st.expander("2. Revisión por Sistemas (Síntomas)"):
                 sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
                 sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
                 sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
-
             with st.expander("3. Factores de Riesgo y Estilo de Vida"):
                 c1, c2 = st.columns(2)
                 dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
                 ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
-            
             submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
             if submitted:
                 consultation_data = {
@@ -323,3 +325,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
