@@ -163,9 +163,13 @@ def create_patient_report_pdf(patient_info, history_df):
         
         pdf.multi_cell(0, 5, f"Motivo: {str(row.get('motivo_consulta', 'N/A'))}")
         
-        vitales = (f"PA: {str(row.get('presion_sistolica', 'N/A'))}/{str(row.get('presion_diastolica', 'N/A'))} mmHg | "
-                   f"Glucemia: {str(row.get('glucemia', 'N/A'))} mg/dL | "
-                   f"IMC: {str(row.get('imc', 'N/A'))}")
+        # --- CORRECCIÓN: Conversión explícita y segura a string para cada valor ---
+        pa_s = str(row.get('presion_sistolica', 'N/A'))
+        pa_d = str(row.get('presion_diastolica', 'N/A'))
+        gluc = str(row.get('glucemia', 'N/A'))
+        imc = str(row.get('imc', 'N/A'))
+        
+        vitales = f"PA: {pa_s}/{pa_d} mmHg | Glucemia: {gluc} mg/dL | IMC: {imc}"
         pdf.multi_cell(0, 5, vitales)
         
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
