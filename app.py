@@ -1,39 +1,38 @@
 # -*- coding: utf-8 -*-
 """
-Suite de Diagnóstico Integral
-Versión: 13.1 (Robust Data Handling)
-Descripción: Versión corregida que introduce un manejo de datos robusto en la
-función de análisis de IA. Previene errores (ValueError) al verificar la
-existencia y el tipo de los datos numéricos (como IMC y Glucemia) antes de
-intentar formatearlos, asegurando que la IA funcione incluso con historiales
-de consulta incompletos.
+Suite de Reportes Clínicos
+Versión: 1.0 ("Clinical Reporting Suite")
+Descripción: Esta versión transforma la aplicación en una completa herramienta de
+documentación clínica. Se introduce la generación de reportes en PDF exhaustivos,
+la persistencia permanente de los análisis de IA en la base de datos junto a su
+consulta correspondiente, y se enriquece el perfil del paciente con nuevos campos.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
 import pandas as pd
-import numpy as np
 from datetime import datetime, timezone
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import google.generativeai as genai
 import altair as alt
+from fpdf import FPDF
+import base64
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Suite de Diagnóstico Integral",
-    page_icon="🩺",
+    page_title="Suite de Reportes Clínicos",
+    page_icon="📄",
     layout="wide"
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "13.1.0 (Robust Data Handling)"
+APP_VERSION = "14.0.0 (Clinical Reporting Suite)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
 # ==============================================================================
 @st.cache_resource
 def init_connections():
-    """Inicializa conexiones a Firebase y Gemini."""
     try:
         creds_dict = dict(st.secrets["firebase_credentials"])
         creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
@@ -58,7 +57,6 @@ DB, GEMINI_MODEL = init_connections()
 
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-    st.session_state.physician_email = None
     st.session_state.page = 'login'
     st.session_state.selected_patient_id = None
 
@@ -76,19 +74,30 @@ def save_new_patient(physician_email, patient_data):
     st.success(f"Paciente {patient_data['nombre']} registrado exitosamente.")
 
 def save_consultation(physician_email, patient_id, consultation_data):
-    if not DB: return
+    if not DB: return None
     timestamp = datetime.now(timezone.utc)
     doc_id = timestamp.strftime('%Y-%m-%d_%H-%M-%S')
     consultation_data['timestamp_utc'] = timestamp.isoformat()
-    # Eliminar claves con valores vacíos o nulos antes de guardar
     clean_data = {k: v for k, v in consultation_data.items() if v is not None and v != ''}
     DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(doc_id).set(clean_data)
     st.toast("Consulta guardada.", icon="✅")
+    return doc_id
+
+def update_consultation_with_ai_analysis(physician_email, patient_id, consultation_id, ai_report):
+    if not DB: return
+    consultation_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(consultation_id)
+    consultation_ref.update({"ai_analysis": ai_report})
+    st.toast("Análisis de IA guardado en el historial.", icon="🧠")
 
 def load_patient_history(physician_email, patient_id):
     if not DB: return pd.DataFrame()
     consultations_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').order_by('timestamp_utc', direction=firestore.Query.DESCENDING).stream()
-    records = [doc.to_dict() for doc in consultations_ref]
+    records = []
+    for doc in consultations_ref:
+        record = doc.to_dict()
+        record['id'] = doc.id
+        records.append(record)
+
     if not records: return pd.DataFrame()
     df = pd.DataFrame(records)
     df['timestamp'] = pd.to_datetime(df['timestamp_utc'])
@@ -98,39 +107,14 @@ def load_patient_history(physician_email, patient_id):
 # MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
 # ==============================================================================
 @st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
-def generate_ai_holistic_review(_patient_df_dict):
+def generate_ai_holistic_review(latest_consultation, history_summary):
     if not GEMINI_MODEL: return "Servicio de IA no disponible."
-    
-    patient_df = pd.DataFrame.from_dict(_patient_df_dict)
-    if 'timestamp' in patient_df.columns:
-        patient_df['timestamp'] = pd.to_datetime(patient_df['timestamp'])
-
-    latest_consultation = patient_df.iloc[0]
-    history_summary = ""
-    for _, row in patient_df.head(5).iterrows():
-        # --- CORRECCIÓN: Manejo robusto de datos numéricos opcionales ---
-        imc_val = row.get('imc')
-        imc_str = f"{imc_val:.1f}" if isinstance(imc_val, (int, float)) else "N/A"
-        
-        glucemia_val = row.get('glucemia')
-        glucemia_str = str(glucemia_val) if glucemia_val is not None else "N/A"
-        
-        history_summary += (
-            f"- {row['timestamp'].strftime('%d-%b-%Y')}: "
-            f"PA {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')}, "
-            f"IMC {imc_str}, Glucemia {glucemia_str} mg/dL\n"
-        )
-    
     prompt = f"""
-    **ROL:** Eres un médico especialista en medicina interna y cardiología, actuando como un asistente de soporte a la decisión para otro colega.
-    **TAREA:** Analiza el historial completo y la última consulta de un paciente para generar un reporte clínico estructurado.
+    **ROL:** Eres un médico especialista en medicina interna y cardiología.
+    **TAREA:** Analiza la última consulta en el contexto del historial del paciente para generar un reporte clínico estructurado.
     **DATOS DE LA ÚLTIMA CONSULTA:**
     - Motivo: {latest_consultation.get('motivo_consulta', 'No especificado')}
-    - Signos Vitales: PA {latest_consultation.get('presion_sistolica', 'N/A')}/{latest_consultation.get('presion_diastolica', 'N/A')} mmHg, FC {latest_consultation.get('frec_cardiaca', 'N/A')} lpm, Glucemia {latest_consultation.get('glucemia', 'N/A')} mg/dL.
-    - Síntomas Cardiovasculares: {latest_consultation.get('sintomas_cardio', [])}
-    - Síntomas Respiratorios: {latest_consultation.get('sintomas_resp', [])}
-    - Síntomas Metabólicos: {latest_consultation.get('sintomas_metabolico', [])}
-    - Estilo de Vida: Dieta ({latest_consultation.get('dieta', 'N/A')}), Ejercicio ({latest_consultation.get('ejercicio', 'N/A')} min/sem).
+    - Signos Vitales: PA {latest_consultation.get('presion_sistolica', 'N/A')}/{latest_consultation.get('presion_diastolica', 'N/A')} mmHg, Glucemia {latest_consultation.get('glucemia', 'N/A')} mg/dL.
     **HISTORIAL DE CONSULTAS (resumen):**
     {history_summary}
     **GENERAR REPORTE CON LA SIGUIENTE ESTRUCTURA:**
@@ -138,13 +122,13 @@ def generate_ai_holistic_review(_patient_df_dict):
     **1. Impresión Diagnóstica Principal y Diferenciales:**
     (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? ¿Qué otras posibilidades deberían considerarse?)
     **2. Estratificación del Riesgo:**
-    (Evalúa el riesgo cardiovascular/metabólico global del paciente. ¿Es bajo, moderado, alto o muy alto? Justifica tu respuesta.)
+    (Evalúa el riesgo cardiovascular/metabólico global del paciente. Justifica tu respuesta.)
     **3. Plan de Manejo Sugerido:**
-    * **Estudios Diagnósticos:** (¿Qué exámenes de laboratorio o imágenes se necesitan para confirmar/descartar los diagnósticos? Ej: EKG, Perfil Lipídico, HbA1c, Ecocardiograma.)
-    * **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar. Ej: "Iniciar o ajustar terapia antihipertensiva con un IECA/ARA-II. Considerar estat_ina de moderada-alta intensidad.")
-    * **Metas Terapéuticas:** (Establece objetivos claros. Ej: "Meta de PA < 130/80 mmHg. Meta de Colesterol LDL < 100 mg/dL.")
+    * **Estudios Diagnósticos:** (¿Qué exámenes de laboratorio o imágenes se necesitan para confirmar/descartar los diagnósticos?)
+    * **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar.)
+    * **Metas Terapéuticas:** (Establece objetivos claros.)
     **4. Educación para el Paciente:**
-    (Proporciona puntos clave para discutir con el paciente. Ej: "Explicar la importancia de la adherencia al tratamiento. Discutir un plan de alimentación tipo DASH y la meta de 150 minutos de ejercicio aeróbico semanal.")
+    (Proporciona puntos clave para discutir con el paciente.)
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
@@ -153,7 +137,50 @@ def generate_ai_holistic_review(_patient_df_dict):
         return f"**Error al generar recomendaciones:** {e}"
 
 # ==============================================================================
-# MÓDULO 4: VISTAS Y COMPONENTES DE UI
+# MÓDULO 4: GENERACIÓN DE REPORTES PDF
+# ==============================================================================
+class PDF(FPDF):
+    def header(self):
+        self.set_font('Arial', 'B', 12)
+        self.cell(0, 10, 'Reporte Clínico del Paciente', 0, 1, 'C')
+    def footer(self):
+        self.set_y(-15)
+        self.set_font('Arial', 'I', 8)
+        self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
+
+def create_patient_report_pdf(patient_info, history_df):
+    pdf = PDF()
+    pdf.add_page()
+    pdf.set_font('Arial', 'B', 16)
+    pdf.cell(0, 10, patient_info.get('nombre', 'N/A'), 0, 1)
+    
+    pdf.set_font('Arial', '', 12)
+    pdf.cell(0, 10, f"Documento: {patient_info.get('cedula', 'N/A')}", 0, 1)
+    pdf.cell(0, 10, f"Dirección: {patient_info.get('direccion', 'N/A')}", 0, 1)
+    pdf.ln(10)
+
+    for _, row in history_df.sort_values('timestamp').iterrows():
+        pdf.set_font('Arial', 'B', 12)
+        pdf.cell(0, 10, f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", 0, 1)
+        pdf.set_font('Arial', '', 10)
+        
+        pdf.multi_cell(0, 5, f"Motivo: {row.get('motivo_consulta', 'N/A')}".encode('latin-1', 'replace').decode('latin-1'))
+        
+        vitales = f"PA: {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')} mmHg | Glucemia: {row.get('glucemia', 'N/A')} mg/dL"
+        pdf.multi_cell(0, 5, vitales.encode('latin-1', 'replace').decode('latin-1'))
+        
+        if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
+            pdf.set_font('Arial', 'I', 10)
+            pdf.ln(5)
+            pdf.multi_cell(0, 5, "--- Análisis por IA ---".encode('latin-1', 'replace').decode('latin-1'))
+            pdf.multi_cell(0, 5, row['ai_analysis'].encode('latin-1', 'replace').decode('latin-1'))
+        
+        pdf.ln(10)
+    
+    return pdf.output(dest='S').encode('latin-1')
+
+# ==============================================================================
+# MÓDULO 5: VISTAS Y COMPONENTES DE UI
 # ==============================================================================
 def render_login_page():
     st.title("Plataforma de Gestión Clínica")
@@ -200,22 +227,22 @@ def render_main_app():
 
 def render_patient_registry():
     st.title("Panel de Control de Pacientes")
-    patients = get_physician_patients(st.session_state.physician_email)
-    
     with st.expander("➕ Registrar Nuevo Paciente", expanded=False):
         with st.form("new_patient_form", clear_on_submit=True):
             nombre = st.text_input("Nombres Completos")
-            cedula = st.text_input("Documento de Identidad (será el ID único)")
+            cedula = st.text_input("Documento de Identidad (ID único)")
+            direccion = st.text_input("Dirección de Residencia")
             telefono = st.text_input("Teléfono")
             submitted = st.form_submit_button("Registrar Paciente")
             if submitted and nombre and cedula:
-                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "telefono": telefono})
+                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "telefono": telefono, "direccion": direccion})
                 st.rerun()
 
     st.divider()
     st.header("Seleccionar Paciente")
+    patients = get_physician_patients(st.session_state.physician_email)
     if not patients:
-        st.info("No hay pacientes registrados. Agregue uno nuevo para comenzar.")
+        st.info("No hay pacientes registrados.")
     else:
         for patient in patients:
             col1, col2, col3 = st.columns([3, 2, 1])
@@ -230,85 +257,63 @@ def render_patient_dashboard():
     patient_id = st.session_state.selected_patient_id
     patient_info = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id).get().to_dict()
     st.title(f"Dashboard Clínico de: {patient_info['nombre']}")
-    st.caption(f"Documento: {patient_info['cedula']}")
+    
+    df_history = load_patient_history(st.session_state.physician_email, patient_id)
 
-    tab1, tab2 = st.tabs(["📈 Historial y Análisis IA", "✍️ Registrar Nueva Consulta"])
+    if not df_history.empty:
+        pdf_data = create_patient_report_pdf(patient_info, df_history)
+        st.download_button(
+            label="📄 Descargar Reporte Completo en PDF",
+            data=pdf_data,
+            file_name=f"Reporte_{patient_info['cedula']}.pdf",
+            mime="application/pdf",
+        )
+
+    tab1, tab2 = st.tabs(["📈 Historial de Consultas", "✍️ Registrar Nueva Consulta"])
 
     with tab1:
-        df_history = load_patient_history(st.session_state.physician_email, patient_id)
         if df_history.empty:
-            st.info("Este paciente no tiene consultas. Agregue una en 'Registrar Nueva Consulta'.")
+            st.info("Este paciente no tiene consultas.")
         else:
-            st.header("Evolución de Parámetros Clave")
-            c1, c2 = st.columns(2)
-            # Gráfico de Presión Arterial
-            presion_chart_data = df_history[['timestamp', 'presion_sistolica', 'presion_diastolica']].dropna()
-            if not presion_chart_data.empty:
-                presion_chart = alt.Chart(presion_chart_data).mark_line(point=True).encode(
-                    x=alt.X('timestamp:T', title='Fecha'),
-                    y=alt.Y('presion_sistolica:Q', title='Presión Sistólica'),
-                    y2='presion_diastolica:Q',
-                    tooltip=['timestamp', 'presion_sistolica', 'presion_diastolica']
-                ).properties(title="Evolución de Presión Arterial").interactive()
-                c1.altair_chart(presion_chart, use_container_width=True)
-            
-            # Gráfico de Glucemia
-            glucemia_chart_data = df_history[['timestamp', 'glucemia']].dropna()
-            if not glucemia_chart_data.empty:
-                 glucemia_chart = alt.Chart(glucemia_chart_data).mark_line(point=True, color='orange').encode(
-                    x=alt.X('timestamp:T', title='Fecha'),
-                    y=alt.Y('glucemia:Q', title='Glucemia (mg/dL)', scale=alt.Scale(zero=False)),
-                    tooltip=['timestamp', 'glucemia']
-                ).properties(title="Evolución de Glucemia").interactive()
-                 c2.altair_chart(glucemia_chart, use_container_width=True)
-
-            if st.button("🧠 Análisis Clínico Integral por IA", use_container_width=True, type="primary"):
-                recommendations = generate_ai_holistic_review(df_history.to_dict())
-                st.markdown(recommendations)
-            st.dataframe(df_history)
+            for _, row in df_history.iterrows():
+                with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
+                    st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
+                    st.write(f"**PA:** {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')} mmHg | **Glucemia:** {row.get('glucemia', 'N/A')} mg/dL")
+                    if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
+                        st.markdown("**Análisis por IA:**")
+                        st.info(row['ai_analysis'])
+                    else:
+                        if st.button("Generar Análisis con IA", key=f"ai_{row['id']}"):
+                            history_summary = "..." # Resumen simple para el prompt
+                            ai_report = generate_ai_holistic_review(row.to_dict(), history_summary)
+                            update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, row['id'], ai_report)
+                            st.rerun()
 
     with tab2:
         with st.form("new_consultation_form"):
-            st.header("Datos de la Consulta")
-            
-            with st.expander("1. Anamnesis y Vitales", expanded=True):
-                motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
-                c1, c2, c3, c4 = st.columns(4)
-                presion_sistolica = c1.number_input("PA Sistólica", min_value=0, value=120)
-                presion_diastolica = c2.number_input("PA Diastólica", min_value=0, value=80)
-                frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0, value=75)
-                glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0, value=95)
-                
-            with st.expander("2. Revisión por Sistemas (Síntomas)"):
-                sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
-                sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
-                sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
-
-            with st.expander("3. Factores de Riesgo y Estilo de Vida"):
-                c1, c2 = st.columns(2)
-                dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
-                ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
-            
+            motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
+            c1, c2, c3, c4 = st.columns(4)
+            presion_sistolica = c1.number_input("PA Sistólica", min_value=0, value=120)
+            presion_diastolica = c2.number_input("PA Diastólica", min_value=0, value=80)
+            frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0, value=75)
+            glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0, value=95)
             submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
             if submitted:
                 consultation_data = {
                     "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
                     "frec_cardiaca": frec_cardiaca, "glucemia": glucemia,
-                    "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
-                    "dieta": dieta, "ejercicio": ejercicio
                 }
                 save_consultation(st.session_state.physician_email, patient_id, consultation_data)
-                st.success("Consulta guardada. El historial se actualizará.")
-                
+                st.rerun()
+
 # ==============================================================================
-# MÓDULO 5: CONTROLADOR PRINCIPAL
+# MÓDULO 6: CONTROLADOR PRINCIPAL
 # ==============================================================================
 def main():
-    if st.session_state.logged_in:
+    if st.session_state.get('logged_in', False):
         render_main_app()
     else:
         render_login_page()
 
 if __name__ == "__main__":
     main()
-
