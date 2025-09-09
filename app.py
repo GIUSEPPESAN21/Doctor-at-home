@@ -201,7 +201,7 @@ def render_main_app():
     # Contenido de la página principal
     if st.session_state.page == 'home':
         st.title("Página Principal")
-        st.image("https://images.unsplash.com/photo-1576091160550-2173dba999ab?q=80&w=2070", use_column_width=True)
+        st.image("https://images.unsplash.com/photo-1576091160550-2173dba999ab?q=80&w=2070", use_container_width=True)
 
     elif st.session_state.page == 'screening':
         render_screening_page()
@@ -304,4 +304,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
