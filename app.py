@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 20.0 ("Final UI Polish")
+Versión: 21.0 ("Final UI")
 Descripción: Versión final que refina la interfaz de usuario moviendo la
 sección "Acerca de" desde la página de login a una nueva pestaña dedicada en
-el panel de control principal, logrando un diseño más limpio y profesional.
+el panel de control principal y eliminando la información de versión para
+lograr un diseño más limpio y profesional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -24,9 +25,6 @@ st.set_page_config(
     page_icon="🩺",
     layout="wide"
 )
-
-# --- CONSTANTES ---
-APP_VERSION = "20.0.0 (Final UI Polish)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -233,7 +231,6 @@ def render_main_app():
         if st.button("Cerrar Sesión", use_container_width=True):
             st.session_state.logged_in = False
             st.rerun()
-        st.info(f"**Versión:** {APP_VERSION}")
         
     if st.session_state.page == 'control_panel':
         render_control_panel()
@@ -278,7 +275,6 @@ def render_control_panel():
     # --- CAMBIO: Contenido movido a la nueva pestaña ---
     with tab2:
         st.markdown("### Acerca de esta Herramienta")
-        st.info(f"**Versión:** {APP_VERSION}")
         st.markdown(
             "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
             "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
