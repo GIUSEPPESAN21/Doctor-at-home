@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 1.0
+Versión: 18.0 ("UI Refinement")
+Descripción: Versión final que mejora la experiencia de usuario reubicando la
+sección "Acerca del Autor" desde la barra lateral a la página de inicio de
+sesión, logrando una interfaz de trabajo más limpia y profesional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -23,7 +26,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "17.0.0 (Author Credit)"
+APP_VERSION = "18.0.0 (UI Refinement)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -194,25 +197,48 @@ def create_patient_report_pdf(patient_info, history_df):
 # ==============================================================================
 def render_login_page():
     st.title("Plataforma de Gestión Clínica")
-    with st.form("login_form"):
-        email = st.text_input("Correo Electrónico del Médico")
-        password = st.text_input("Contraseña", type="password")
-        c1, c2 = st.columns(2)
-        login_button = c1.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
-        register_button = c2.form_submit_button("Registrarse", use_container_width=True)
-    if login_button:
-        try:
-            user = auth.get_user_by_email(email)
-            st.session_state.logged_in = True
-            st.session_state.physician_email = user.email
-            st.session_state.page = 'patient_registry'
-            st.rerun()
-        except Exception as e: st.error(f"Error de inicio de sesión: {e}")
-    if register_button:
-        try:
-            user = auth.create_user(email=email, password=password)
-            st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
-        except Exception as e: st.error(f"Error de registro: {e}")
+    
+    col1, col2 = st.columns([1,1])
+    
+    with col1:
+        with st.form("login_form"):
+            email = st.text_input("Correo Electrónico del Médico")
+            password = st.text_input("Contraseña", type="password")
+            login_button = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
+            register_button = st.form_submit_button("Registrarse", use_container_width=True)
+            
+        if login_button:
+            try:
+                user = auth.get_user_by_email(email)
+                st.session_state.logged_in = True
+                st.session_state.physician_email = user.email
+                st.session_state.page = 'patient_registry'
+                st.rerun()
+            except Exception as e: st.error(f"Error de inicio de sesión: {e}")
+        if register_button:
+            try:
+                user = auth.create_user(email=email, password=password)
+                st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
+            except Exception as e: st.error(f"Error de registro: {e}")
+
+    with col2:
+        st.markdown("### Acerca de esta Herramienta")
+        st.info(f"**Versión:** {APP_VERSION}")
+        st.markdown(
+            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
+            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
+            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
+        )
+        # --- SECCIÓN DEL AUTOR REUBICADA ---
+        st.divider()
+        st.markdown("##### Autor")
+        st.write("**Joseph Javier Sánchez Acuña**")
+        st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
+        st.markdown("---")
+        st.markdown("##### Contacto")
+        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+        st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
 def render_main_app():
     with st.sidebar:
@@ -229,18 +255,6 @@ def render_main_app():
             st.rerun()
         st.info(f"**Versión:** {APP_VERSION}")
         
-        # --- NUEVA SECCIÓN: ACERCA DEL AUTOR ---
-        st.divider()
-        with st.expander("Acerca del Autor"):
-            st.markdown("##### Autor")
-            st.write("**Joseph Javier Sánchez Acuña**")
-            st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
-            st.markdown("---")
-            st.markdown("##### Contacto")
-            st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
-            st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
-            st.write("📧 joseph.sanchez@uniminuto.edu.co")
-
     if st.session_state.page == 'patient_registry':
         render_patient_registry()
     elif st.session_state.page == 'patient_dashboard':
@@ -362,3 +376,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
