@@ -1,12 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 16.3 ("Professional AI Prompting")
-Descripción: Esta versión refina drásticamente la calidad del análisis de IA.
-Se ha implementado un motor de "prompt engineering" que recopila un resumen
-contextual completo del paciente (demografía e historial) y le da a Gemini
-instrucciones precisas para estructurar su respuesta en un formato clínico
-profesional, solucionando el problema de la desorganización.
+Versión: 1.0
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -28,7 +23,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "16.3.0 (Professional AI Prompting)"
+APP_VERSION = "17.0.0 (Author Credit)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -233,6 +228,18 @@ def render_main_app():
             st.session_state.logged_in = False
             st.rerun()
         st.info(f"**Versión:** {APP_VERSION}")
+        
+        # --- NUEVA SECCIÓN: ACERCA DEL AUTOR ---
+        st.divider()
+        with st.expander("Acerca del Autor"):
+            st.markdown("##### Autor")
+            st.write("**Joseph Javier Sánchez Acuña**")
+            st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
+            st.markdown("---")
+            st.markdown("##### Contacto")
+            st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+            st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+            st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
     if st.session_state.page == 'patient_registry':
         render_patient_registry()
@@ -355,4 +362,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
