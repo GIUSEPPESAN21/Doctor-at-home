@@ -1,1 +1,15 @@
+# Core Framework
+streamlit
 
+# Data Handling & Numerics
+pandas
+numpy
+
+# Database Connector
+firebase-admin
+
+# Google AI SDK
+google-generativeai
+
+# Advanced Visualization
+altair
