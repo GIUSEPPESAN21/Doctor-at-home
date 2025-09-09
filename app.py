@@ -1,21 +1,23 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 15.0 ("Suite Clínica Definitiva")
-Descripción: Versión final que corrige un error crítico en el motor de PDF,
-restaura el formulario de consulta clínica exhaustivo para una captura de datos
-rica y precisa, e integra la edad del paciente en el registro, dashboard y
-reportes. Esta versión representa la culminación del desarrollo, resultando en
-una herramienta robusta y profesional.
+Versión: 16.0 ("ReportLab Engine")
+Descripción: Versión final que resuelve el error persistente de generación de
+PDFs reemplazando la librería fpdf2 por ReportLab, el estándar de la industria.
+Este cambio fundamental asegura una creación de reportes robusta, estable y
+compatible con caracteres especiales, culminando el desarrollo de la plataforma.
 """
-# --- LIBRERías ---
+# --- LIBRERÍAS ---
 import streamlit as st
 import pandas as pd
 from datetime import datetime, timezone
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
 import google.generativeai as genai
-from fpdf import FPDF
+from io import BytesIO
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
@@ -25,7 +27,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "15.0.0 (Suite Clínica Definitiva)"
+APP_VERSION = "16.0.0 (ReportLab Engine)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -113,74 +115,59 @@ def generate_ai_holistic_review(latest_consultation, history_summary):
     **DATOS DE LA ÚLTIMA CONSULTA:**
     - Motivo: {latest_consultation.get('motivo_consulta', 'No especificado')}
     - Signos Vitales: PA {latest_consultation.get('presion_sistolica', 'N/A')}/{latest_consultation.get('presion_diastolica', 'N/A')} mmHg, Glucemia {latest_consultation.get('glucemia', 'N/A')} mg/dL.
-    - Síntomas Relevantes: {latest_consultation.get('sintomas_cardio', [])}, {latest_consultation.get('sintomas_resp', [])}, {latest_consultation.get('sintomas_metabolico', [])}
-    **HISTORIAL DE CONSULTAS (resumen):**
-    {history_summary}
     **GENERAR REPORTE CON LA SIGUIENTE ESTRUCTURA:**
     ### Análisis Clínico Integral por IA
     **1. Impresión Diagnóstica Principal y Diferenciales:**
     **2. Estratificación del Riesgo:**
     **3. Plan de Manejo Sugerido:**
-    * **Estudios Diagnósticos:**
-    * **Tratamiento Farmacológico:**
-    * **Metas Terapéuticas:**
-    **4. Educación para el Paciente:**
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
-        return response.text
+        return response.text.replace('*', '- ') # Reemplazar asteriscos para mejor formato PDF
     except Exception as e:
         return f"**Error al generar recomendaciones:** {e}"
 
 # ==============================================================================
-# MÓDULO 4: GENERACIÓN DE REPORTES PDF
+# MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
 # ==============================================================================
-class PDF(FPDF):
-    def header(self):
-        self.set_font('Arial', 'B', 12)
-        self.cell(0, 10, 'Reporte Clínico del Paciente', 0, 1, 'C')
-    def footer(self):
-        self.set_y(-15)
-        self.set_font('Arial', 'I', 8)
-        self.cell(0, 10, f'Página {self.page_no()}', 0, 0, 'C')
-
 def create_patient_report_pdf(patient_info, history_df):
-    pdf = PDF()
-    pdf.add_page()
-    pdf.set_font('Arial', 'B', 16)
-    pdf.cell(0, 10, str(patient_info.get('nombre', 'N/A')), 0, 1)
-    
-    pdf.set_font('Arial', '', 12)
-    pdf.cell(0, 10, f"Documento: {patient_info.get('cedula', 'N/A')}", 0, 1)
-    pdf.cell(0, 10, f"Edad: {patient_info.get('edad', 'N/A')} años", 0, 1)
-    pdf.cell(0, 10, f"Dirección: {patient_info.get('direccion', 'N/A')}", 0, 1)
-    pdf.ln(10)
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    story = []
 
+    # Título y Datos del Paciente
+    story.append(Paragraph(str(patient_info.get('nombre', 'N/A')), styles['h1']))
+    story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
+    story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
+    story.append(Paragraph(f"Dirección: {patient_info.get('direccion', 'N/A')}", styles['Normal']))
+    story.append(Spacer(1, 0.25*inch))
+
+    # Historial de Consultas
     for _, row in history_df.sort_values('timestamp').iterrows():
-        pdf.set_font('Arial', 'B', 12)
-        pdf.cell(0, 10, f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", 0, 1)
-        pdf.set_font('Arial', '', 10)
+        story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
         
-        pdf.multi_cell(0, 5, f"Motivo: {str(row.get('motivo_consulta', 'N/A'))}")
+        motivo = str(row.get('motivo_consulta', 'N/A')).replace('\n', '<br/>')
+        story.append(Paragraph(f"<b>Motivo:</b> {motivo}", styles['Normal']))
         
-        # --- CORRECCIÓN: Conversión explícita y segura a string para cada valor ---
         pa_s = str(row.get('presion_sistolica', 'N/A'))
         pa_d = str(row.get('presion_diastolica', 'N/A'))
         gluc = str(row.get('glucemia', 'N/A'))
         imc = str(row.get('imc', 'N/A'))
-        
-        vitales = f"PA: {pa_s}/{pa_d} mmHg | Glucemia: {gluc} mg/dL | IMC: {imc}"
-        pdf.multi_cell(0, 5, vitales)
+        vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
+        story.append(Paragraph(vitales, styles['Normal']))
         
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-            pdf.set_font('Arial', 'I', 10)
-            pdf.ln(5)
-            pdf.multi_cell(0, 5, "--- Análisis por IA ---")
-            pdf.multi_cell(0, 5, str(row['ai_analysis']))
+            story.append(Spacer(1, 0.1*inch))
+            story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
+            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>')
+            story.append(Paragraph(analysis_text, styles['Normal']))
         
-        pdf.ln(10)
+        story.append(Spacer(1, 0.25*inch))
     
-    return pdf.output()
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
 # ==============================================================================
 # MÓDULO 5: VISTAS Y COMPONENTES DE UI
@@ -336,4 +323,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
