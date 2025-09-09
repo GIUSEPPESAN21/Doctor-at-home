@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 13.0 ("Comprehensive Clinical Suite")
-Descripción: Evolución final hacia una plataforma clínica completa. Se introduce
-un formulario de consulta exhaustivo basado en guías de semiología, que abarca
-múltiples sistemas y factores de riesgo. El motor de IA (Gemini) se recalibra
-para analizar este conjunto de datos enriquecido y proporcionar un análisis
-diferencial y un plan de manejo detallado.
+Versión: 13.1 (Robust Data Handling)
+Descripción: Versión corregida que introduce un manejo de datos robusto en la
+función de análisis de IA. Previene errores (ValueError) al verificar la
+existencia y el tipo de los datos numéricos (como IMC y Glucemia) antes de
+intentar formatearlos, asegurando que la IA funcione incluso con historiales
+de consulta incompletos.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -26,7 +26,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "13.0.0 (Comprehensive Clinical Suite)"
+APP_VERSION = "13.1.0 (Robust Data Handling)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -80,7 +80,9 @@ def save_consultation(physician_email, patient_id, consultation_data):
     timestamp = datetime.now(timezone.utc)
     doc_id = timestamp.strftime('%Y-%m-%d_%H-%M-%S')
     consultation_data['timestamp_utc'] = timestamp.isoformat()
-    DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(doc_id).set(consultation_data)
+    # Eliminar claves con valores vacíos o nulos antes de guardar
+    clean_data = {k: v for k, v in consultation_data.items() if v is not None and v != ''}
+    DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(doc_id).set(clean_data)
     st.toast("Consulta guardada.", icon="✅")
 
 def load_patient_history(physician_email, patient_id):
@@ -98,6 +100,7 @@ def load_patient_history(physician_email, patient_id):
 @st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
 def generate_ai_holistic_review(_patient_df_dict):
     if not GEMINI_MODEL: return "Servicio de IA no disponible."
+    
     patient_df = pd.DataFrame.from_dict(_patient_df_dict)
     if 'timestamp' in patient_df.columns:
         patient_df['timestamp'] = pd.to_datetime(patient_df['timestamp'])
@@ -105,7 +108,18 @@ def generate_ai_holistic_review(_patient_df_dict):
     latest_consultation = patient_df.iloc[0]
     history_summary = ""
     for _, row in patient_df.head(5).iterrows():
-        history_summary += f"- {row['timestamp'].strftime('%d-%b-%Y')}: PA {row['presion_sistolica']}/{row['presion_diastolica']}, IMC {row.get('imc', 'N/A'):.1f}, Glucemia {row.get('glucemia', 'N/A')} mg/dL\n"
+        # --- CORRECCIÓN: Manejo robusto de datos numéricos opcionales ---
+        imc_val = row.get('imc')
+        imc_str = f"{imc_val:.1f}" if isinstance(imc_val, (int, float)) else "N/A"
+        
+        glucemia_val = row.get('glucemia')
+        glucemia_str = str(glucemia_val) if glucemia_val is not None else "N/A"
+        
+        history_summary += (
+            f"- {row['timestamp'].strftime('%d-%b-%Y')}: "
+            f"PA {row.get('presion_sistolica', 'N/A')}/{row.get('presion_diastolica', 'N/A')}, "
+            f"IMC {imc_str}, Glucemia {glucemia_str} mg/dL\n"
+        )
     
     prompt = f"""
     **ROL:** Eres un médico especialista en medicina interna y cardiología, actuando como un asistente de soporte a la decisión para otro colega.
@@ -169,7 +183,7 @@ def render_main_app():
         physician_email = st.session_state.get('physician_email', 'Cargando...')
         st.write(physician_email)
         st.divider()
-        if st.button("Registro de Pacientes", use_container_width=True):
+        if st.button("Panel de Pacientes", use_container_width=True):
             st.session_state.page = 'patient_registry'
             st.session_state.selected_patient_id = None
             st.rerun()
@@ -226,7 +240,28 @@ def render_patient_dashboard():
             st.info("Este paciente no tiene consultas. Agregue una en 'Registrar Nueva Consulta'.")
         else:
             st.header("Evolución de Parámetros Clave")
-            # Charts... (similar to previous version, can add more)
+            c1, c2 = st.columns(2)
+            # Gráfico de Presión Arterial
+            presion_chart_data = df_history[['timestamp', 'presion_sistolica', 'presion_diastolica']].dropna()
+            if not presion_chart_data.empty:
+                presion_chart = alt.Chart(presion_chart_data).mark_line(point=True).encode(
+                    x=alt.X('timestamp:T', title='Fecha'),
+                    y=alt.Y('presion_sistolica:Q', title='Presión Sistólica'),
+                    y2='presion_diastolica:Q',
+                    tooltip=['timestamp', 'presion_sistolica', 'presion_diastolica']
+                ).properties(title="Evolución de Presión Arterial").interactive()
+                c1.altair_chart(presion_chart, use_container_width=True)
+            
+            # Gráfico de Glucemia
+            glucemia_chart_data = df_history[['timestamp', 'glucemia']].dropna()
+            if not glucemia_chart_data.empty:
+                 glucemia_chart = alt.Chart(glucemia_chart_data).mark_line(point=True, color='orange').encode(
+                    x=alt.X('timestamp:T', title='Fecha'),
+                    y=alt.Y('glucemia:Q', title='Glucemia (mg/dL)', scale=alt.Scale(zero=False)),
+                    tooltip=['timestamp', 'glucemia']
+                ).properties(title="Evolución de Glucemia").interactive()
+                 c2.altair_chart(glucemia_chart, use_container_width=True)
+
             if st.button("🧠 Análisis Clínico Integral por IA", use_container_width=True, type="primary"):
                 recommendations = generate_ai_holistic_review(df_history.to_dict())
                 st.markdown(recommendations)
@@ -239,10 +274,10 @@ def render_patient_dashboard():
             with st.expander("1. Anamnesis y Vitales", expanded=True):
                 motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
                 c1, c2, c3, c4 = st.columns(4)
-                presion_sistolica = c1.number_input("PA Sistólica", 80, 220, 120)
-                presion_diastolica = c2.number_input("PA Diastólica", 50, 140, 80)
-                frec_cardiaca = c3.number_input("Frec. Cardíaca", 40, 150, 75)
-                glucemia = c4.number_input("Glucemia (mg/dL)", 50, 500, 95)
+                presion_sistolica = c1.number_input("PA Sistólica", min_value=0, value=120)
+                presion_diastolica = c2.number_input("PA Diastólica", min_value=0, value=80)
+                frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0, value=75)
+                glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0, value=95)
                 
             with st.expander("2. Revisión por Sistemas (Síntomas)"):
                 sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
