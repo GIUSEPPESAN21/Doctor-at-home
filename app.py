@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 16.2 ("State Management Fix")
-Descripción: Versión final y estable que corrige un error crítico de
-AttributeError en la gestión de estado de la sesión. Se ha refactorizado la
-lógica de manejo de clics para el análisis de IA, asegurando una inicialización
-correcta de las variables y un seguimiento preciso de las acciones del usuario,
-resultando en una aplicación robusta y completamente funcional.
+Versión: 16.3 ("Professional AI Prompting")
+Descripción: Esta versión refina drásticamente la calidad del análisis de IA.
+Se ha implementado un motor de "prompt engineering" que recopila un resumen
+contextual completo del paciente (demografía e historial) y le da a Gemini
+instrucciones precisas para estructurar su respuesta en un formato clínico
+profesional, solucionando el problema de la desorganización.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "16.2.0 (State Management Fix)"
+APP_VERSION = "16.3.0 (Professional AI Prompting)"
 
 # ==============================================================================
 # MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
@@ -111,23 +111,50 @@ def load_patient_history(physician_email, patient_id):
 # ==============================================================================
 # MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
 # ==============================================================================
-def generate_ai_holistic_review(latest_consultation, history_summary):
+@st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
+def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
     if not GEMINI_MODEL: return "Servicio de IA no disponible."
+    
     prompt = f"""
-    **ROL:** Eres un médico especialista en medicina interna y cardiología.
-    **TAREA:** Analiza la última consulta en el contexto del historial del paciente para generar un reporte clínico estructurado.
-    **DATOS DE LA ÚLTIMA CONSULTA:**
-    - Motivo: {latest_consultation.get('motivo_consulta', 'No especificado')}
-    - Signos Vitales: PA {latest_consultation.get('presion_sistolica', 'N/A')}/{latest_consultation.get('presion_diastolica', 'N/A')} mmHg, Glucemia {latest_consultation.get('glucemia', 'N/A')} mg/dL.
-    **GENERAR REPORTE CON LA SIGUIENTE ESTRUCTURA:**
+    **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente para generar un reporte clínico estructurado, profesional y accionable.
+
+    **CONTEXTO DEL PACIENTE:**
+    - Nombre: {str(_patient_info.get('nombre', 'No especificado'))}
+    - Edad: {str(_patient_info.get('edad', 'No especificada'))} años
+    
+    **DATOS DE LA CONSULTA ACTUAL:**
+    - Motivo: {str(_latest_consultation.get('motivo_consulta', 'No especificado'))}
+    - Signos Vitales: PA {str(_latest_consultation.get('presion_sistolica', 'N/A'))}/{str(_latest_consultation.get('presion_diastolica', 'N/A'))} mmHg, Glucemia {str(_latest_consultation.get('glucemia', 'N/A'))} mg/dL, IMC {str(_latest_consultation.get('imc', 'N/A'))} kg/m².
+    - Síntomas Relevantes: Cardiovascular({str(_latest_consultation.get('sintomas_cardio', []))}), Respiratorio({str(_latest_consultation.get('sintomas_resp', []))}), Metabólico({str(_latest_consultation.get('sintomas_metabolico', []))})
+
+    **RESUMEN DEL HISTORIAL PREVIO:**
+    {_history_summary}
+
+    **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
+
     ### Análisis Clínico Integral por IA
-    **1. Impresión Diagnóstica Principal y Diferenciales:**
-    **2. Estratificación del Riesgo:**
-    **3. Plan de Manejo Sugerido:**
+
+    **1. RESUMEN DEL CASO:**
+    (Presenta un resumen conciso del paciente, su edad, y el motivo de la consulta actual en el contexto de su historial.)
+
+    **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
+    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales que deberían ser considerados y por qué.)
+
+    **3. ESTRATIFICACIÓN DEL RIESGO:**
+    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica tu respuesta basándote en los datos.)
+
+    **4. PLAN DE MANEJO SUGERIDO:**
+    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos. Sé específico, ej: "Hemoglobina Glicosilada (HbA1c)", "Perfil Lipídico Completo", "Electrocardiograma (EKG) de 12 derivaciones".)
+    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida. Ej: "Iniciar plan de alimentación tipo DASH", "Aumentar actividad física aeróbica a 150 min/semana".)
+    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica. Ej: "Considerar inicio de terapia antihipertensiva con IECA/ARA-II", "Evaluar necesidad de estatina de moderada intensidad.")
+    - **Metas Terapéuticas:** (Establece objetivos numéricos claros. Ej: "Meta de PA < 130/80 mmHg", "Meta de HbA1c < 7.0%")
+
+    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
+    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente. Ej: "Explicar la relación entre el peso y la presión arterial", "Importancia de la monitorización de la presión en casa".)
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
-        return response.text.replace('*', '- ')
+        return response.text
     except Exception as e:
         return f"**Error al generar recomendaciones:** {e}"
 
@@ -159,7 +186,7 @@ def create_patient_report_pdf(patient_info, history_df):
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1*inch))
             story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
-            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>')
+            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('*', '- ')
             story.append(Paragraph(analysis_text, styles['Normal']))
         story.append(Spacer(1, 0.25*inch))
     
@@ -264,15 +291,12 @@ def render_patient_dashboard():
         if df_history.empty:
             st.info("Este paciente no tiene consultas.")
         else:
-            # --- LÓGICA DE ANÁLISIS DE IA CORREGIDA ---
-            # Se ejecuta fuera del bucle de renderizado para evitar conflictos
             if st.session_state.ai_analysis_running:
                 consultation_id_to_process = st.session_state.last_clicked_ai
-                # Encontrar la fila de datos para esa consulta
                 row_to_process = df_history[df_history['id'] == consultation_id_to_process].iloc[0]
+                history_summary = "..."
                 with st.spinner("Contactando al asistente de IA..."):
-                    history_summary = "..."
-                    ai_report = generate_ai_holistic_review(row_to_process.to_dict(), history_summary)
+                    ai_report = generate_ai_holistic_review(patient_info, row_to_process.to_dict(), history_summary)
                     update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id_to_process, ai_report)
                 st.session_state.ai_analysis_running = False
                 st.session_state.last_clicked_ai = None
@@ -282,12 +306,10 @@ def render_patient_dashboard():
                 with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
                     st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
                     if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-                        st.markdown("**Análisis por IA:**")
-                        st.info(row['ai_analysis'])
+                        st.markdown(row['ai_analysis'])
                     else:
-                        button_label = "Generar Análisis con IA"
                         button_key = f"ai_{row['id']}"
-                        if st.button(button_label, key=button_key, disabled=st.session_state.ai_analysis_running):
+                        if st.button("Generar Análisis con IA", key=button_key, disabled=st.session_state.ai_analysis_running):
                             st.session_state.ai_analysis_running = True
                             st.session_state.last_clicked_ai = row['id']
                             st.rerun()
@@ -303,17 +325,14 @@ def render_patient_dashboard():
                 frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
                 glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
                 imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
-            
             with st.expander("2. Revisión por Sistemas (Síntomas)"):
                 sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
                 sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
                 sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
-
             with st.expander("3. Factores de Riesgo y Estilo de Vida"):
                 c1, c2 = st.columns(2)
                 dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
                 ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
-            
             submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
             if submitted:
                 consultation_data = {
