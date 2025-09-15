@@ -2,9 +2,8 @@
 """
 Aplicación Streamlit para el Balanceo de Líneas de Producción.
 
-Versión 4.0: Rediseño completo de la interfaz de usuario. Se introduce un
-panel de control superior, contenedores visuales y una sección de estaciones
-plegable para una experiencia más limpia y profesional.
+Versión 4.1: La información del autor se mueve a una sección "Acerca de"
+plegable al final de la página para una mejor organización.
 """
 import streamlit as st
 import datetime
@@ -314,9 +313,10 @@ if 'results' in st.session_state and st.session_state.results:
         with tab3:
             st.dataframe(linea_res.empleados_asignados_por_estacion)
 
-# --- Pie de Página ---
-with st.container(border=True):
-    col1, col2 = st.columns([1,2])
+# --- Sección "Acerca de" ---
+st.write("") # Espacio vertical
+with st.expander("ℹ️ Acerca del Autor y la Aplicación"):
+    col1, col2 = st.columns([1, 2])
     with col1:
         st.markdown("##### **Autor**")
         st.write("**Joseph Javier Sánchez Acuña**")
@@ -324,8 +324,10 @@ with st.container(border=True):
     with col2:
         st.markdown("##### **Contacto**")
         st.write(
-            "🔗 [LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275) &nbsp;&nbsp;"
+            "🔗 [LinkedIn](https.linkedin.com/in/joseph-javier-sánchez-acuña-150410275) &nbsp;&nbsp;"
             "📂 [GitHub](https://github.com/GIUSEPPESAN21) &nbsp;&nbsp;"
             "📧 joseph.sanchez@uniminuto.edu.co"
         )
+    st.markdown("---")
+    st.write("Esta aplicación fue desarrollada como una herramienta avanzada para el análisis y balanceo de líneas de producción, utilizando Python y Streamlit, con capacidades de notificación en tiempo real a través de Twilio.")
 
