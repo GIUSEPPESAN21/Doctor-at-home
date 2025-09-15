@@ -231,7 +231,7 @@ if 'twilio_client' not in st.session_state:
 # --- Interfaz de Usuario Principal ---
 st.title("🏭 Optimizador Avanzado de Líneas de Producción")
 
-with st.expander("⚙️ Configurar Simulación, Estaciones y Autor", expanded=True):
+with st.expander("⚙️ Configurar Simulación y Estaciones", expanded=True):
     col_params, col_actions = st.columns([1, 1])
     with col_params:
         unidades = st.number_input("Unidades a Producir", 1, value=100, step=10)
@@ -255,19 +255,8 @@ with st.expander("⚙️ Configurar Simulación, Estaciones y Autor", expanded=T
             st.session_state.estaciones[i]['tiempo'] = st.number_input("Tiempo (min)", 0.01, value=est['tiempo'], key=f"tiempo_{i}")
             opts = [""] + [e['nombre'] for j, e in enumerate(st.session_state.estaciones) if i != j and e['nombre']]
             st.session_state.estaciones[i]['predecesora'] = st.selectbox("Predecesora", opts, index=(opts.index(est['predecesora']) if est['predecesora'] in opts else 0), key=f"pred_{i}")
-    
-    # --- Información del Autor ---
-    st.divider()
-    st.markdown("##### Autor")
-    st.write("**Joseph Javier Sánchez Acuña**")
-    st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
-    st.markdown("---")
-    st.markdown("##### Contacto")
-    st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
-    st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
-    st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
-
+# --- Botones de Acción ---
 c1, c2, c3 = st.columns([2, 1, 1])
 if c1.button("🚀 Calcular y Optimizar", type="primary", use_container_width=True):
     try:
@@ -295,6 +284,7 @@ if c3.button("🔄 Resetear", use_container_width=True):
     ]
     st.rerun()
 
+# --- Panel de Resultados ---
 if 'results' in st.session_state and st.session_state.results:
     linea_res = st.session_state.results['linea_obj']
     st.markdown("---")
@@ -317,4 +307,15 @@ if 'results' in st.session_state and st.session_state.results:
         st.dataframe([{"Estación": est.nombre, "Tiempo": est.tiempo, "ES": est.es, "EF": est.ef, "LS": est.ls, "LF": est.lf, "Holgura": f"{est.holgura:.2f}", "Crítica": "🔴 Sí" if est.es_critica else "🟢 No"} for est in linea_res.estaciones_lista])
     with tab3:
         st.dataframe(linea_res.empleados_asignados_por_estacion)
+
+# --- Pie de Página con Información del Autor ---
+st.divider()
+st.markdown("##### Autor")
+st.write("**Joseph Javier Sánchez Acuña**")
+st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
+st.markdown("---")
+st.markdown("##### Contacto")
+st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
