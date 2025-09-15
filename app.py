@@ -1,5 +1,11 @@
 # -*- coding: utf-8 -*-
+"""
+Aplicación Streamlit para el Balanceo de Líneas de Producción.
 
+Versión 4.0: Rediseño completo de la interfaz de usuario. Se introduce un
+panel de control superior, contenedores visuales y una sección de estaciones
+plegable para una experiencia más limpia y profesional.
+"""
 import streamlit as st
 import datetime
 import matplotlib
@@ -150,8 +156,6 @@ def enviar_alerta_whatsapp(mensaje):
     try:
         from_number = st.secrets["TWILIO_WHATSAPP_FROM_NUMBER"]
         to_number = st.secrets["DESTINATION_WHATSAPP_NUMBER"]
-        
-        # Prefijo obligatorio para cuentas de prueba (Trial Account)
         codigo_aleatorio = random.randint(100000, 999999)
         mensaje_final = f"Your Twilio code is {codigo_aleatorio}\n\n{mensaje}"
 
@@ -173,15 +177,11 @@ def enviar_alerta_whatsapp(mensaje):
 def generar_graficos(linea_obj):
     fig_pie, ax1 = plt.subplots(figsize=(5, 4))
     ax1.pie([e.tiempo for e in linea_obj.estaciones_lista], labels=[e.nombre for e in linea_obj.estaciones_lista], autopct='%1.1f%%', startangle=90)
-    ax1.axis('equal')
-    ax1.set_title('Distribución de Tiempos')
+    ax1.axis('equal'); ax1.set_title('Distribución de Tiempos')
     plt.tight_layout()
-    
     fig_bar, ax2 = plt.subplots(figsize=(5, 4))
     ax2.bar([a['nombre'] for a in linea_obj.empleados_asignados_por_estacion], [a['empleados'] for a in linea_obj.empleados_asignados_por_estacion], color='skyblue')
-    ax2.set_title('Asignación de Empleados')
-    plt.xticks(rotation=45, ha="right")
-    plt.tight_layout()
+    ax2.set_title('Asignación de Empleados'); plt.xticks(rotation=45, ha="right"); plt.tight_layout()
     return fig_pie, fig_bar
 
 def generar_reporte_pdf(linea_obj):
@@ -206,13 +206,10 @@ def generar_reporte_pdf(linea_obj):
     charts = []
     for fig in [fig_pie, fig_bar]:
         if fig:
-            buf = BytesIO()
-            fig.savefig(buf, format='PNG', dpi=300)
-            buf.seek(0)
+            buf = BytesIO(); fig.savefig(buf, format='PNG', dpi=300); buf.seek(0)
             charts.append(Image(buf, width=3.5*inch, height=2.8*inch))
     if charts: story.append(Table([charts]))
-    doc.build(story)
-    buffer.seek(0)
+    doc.build(story); buffer.seek(0)
     return buffer.getvalue()
 
 # --- Configuración Inicial y Estado ---
@@ -224,41 +221,58 @@ if 'estaciones' not in st.session_state:
         {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
         {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
     ]
-
 if 'twilio_client' not in st.session_state:
     st.session_state.twilio_client = inicializar_twilio_client()
 
 # --- Interfaz de Usuario Principal ---
 st.title("🏭 Optimizador Avanzado de Líneas de Producción")
+st.markdown("Configure los parámetros, defina las estaciones y presione **Calcular** para obtener un análisis completo.")
 
-with st.expander("⚙️ Configurar Simulación y Estaciones", expanded=True):
-    col_params, col_actions = st.columns([1, 1])
-    with col_params:
-        unidades = st.number_input("Unidades a Producir", 1, value=100, step=10)
-        empleados = st.number_input("Empleados Disponibles", 1, value=5, step=1)
-    with col_actions:
-        st.subheader("Gestionar Estaciones")
-        c1, c2 = st.columns(2)
-        if c1.button("➕ Añadir Estación", use_container_width=True):
+# --- Panel de Control Superior ---
+with st.container(border=True):
+    col1, col2, col3 = st.columns([1, 1, 2])
+    with col1:
+        unidades = st.number_input("Unidades a Producir", 1, value=100, step=10, help="Total de productos a fabricar.")
+    with col2:
+        empleados = st.number_input("Empleados Disponibles", 1, value=5, step=1, help="Número total de operarios en la línea.")
+    
+    with col3:
+        st.write(" &nbsp; ") 
+        action_cols = st.columns(3)
+        calculate_pressed = action_cols[0].button("🚀 Calcular", type="primary", use_container_width=True)
+        download_placeholder = action_cols[1].empty()
+        if action_cols[2].button("🔄 Resetear", use_container_width=True):
+            st.session_state.results = None
+            st.session_state.estaciones = [
+                {'nombre': 'Corte', 'tiempo': 2.0, 'predecesora': ''}, {'nombre': 'Doblado', 'tiempo': 3.0, 'predecesora': 'Corte'},
+                {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
+                {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
+            ]
+            st.rerun()
+
+# --- Definición de Estaciones (Plegable) ---
+with st.expander("⚙️ **Haga clic aquí para definir las estaciones**", expanded=True):
+    gestion_cols = st.columns([4, 1, 1])
+    with gestion_cols[1]:
+        if st.button("➕ Añadir", use_container_width=True):
             st.session_state.estaciones.append({'nombre': '', 'tiempo': 1.0, 'predecesora': ''})
             st.rerun()
-        if c2.button("➖ Quitar Última", use_container_width=True, disabled=len(st.session_state.estaciones) <= 1):
+    with gestion_cols[2]:
+        if st.button("➖ Quitar", use_container_width=True, disabled=len(st.session_state.estaciones) <= 1):
             st.session_state.estaciones.pop()
             st.rerun()
 
-    st.subheader("Definición de Estaciones")
-    cols = st.columns(max(1, len(st.session_state.estaciones)))
+    estaciones_cols = st.columns(max(1, len(st.session_state.estaciones)))
     for i, est in enumerate(st.session_state.estaciones):
-        with cols[i % len(cols)]:
+        with estaciones_cols[i % len(estaciones_cols)]:
             st.markdown(f"**Estación {i+1}**")
             st.session_state.estaciones[i]['nombre'] = st.text_input("Nombre", est['nombre'], key=f"nombre_{i}")
             st.session_state.estaciones[i]['tiempo'] = st.number_input("Tiempo (min)", 0.01, value=est['tiempo'], key=f"tiempo_{i}")
             opts = [""] + [e['nombre'] for j, e in enumerate(st.session_state.estaciones) if i != j and e['nombre']]
             st.session_state.estaciones[i]['predecesora'] = st.selectbox("Predecesora", opts, index=(opts.index(est['predecesora']) if est['predecesora'] in opts else 0), key=f"pred_{i}")
 
-# --- Botones de Acción ---
-c1, c2, c3 = st.columns([2, 1, 1])
-if c1.button("🚀 Calcular y Optimizar", type="primary", use_container_width=True):
+# --- Lógica de Cálculo ---
+if calculate_pressed:
     try:
         linea = LineaProduccion(st.session_state.estaciones, unidades, empleados)
         linea.ejecutar_calculos()
@@ -271,51 +285,47 @@ if c1.button("🚀 Calcular y Optimizar", type="primary", use_container_width=Tr
         st.error(f"Error en el cálculo: {e}")
         st.session_state.results = None
 
-if 'results' in st.session_state and st.session_state.results:
-    if c2.download_button("📄 Descargar Reporte PDF", generar_reporte_pdf(st.session_state.results['linea_obj']), "reporte.pdf", "application/pdf", use_container_width=True):
-        pass
-
-if c3.button("🔄 Resetear", use_container_width=True):
-    st.session_state.results = None
-    st.session_state.estaciones = [
-        {'nombre': 'Corte', 'tiempo': 2.0, 'predecesora': ''}, {'nombre': 'Doblado', 'tiempo': 3.0, 'predecesora': 'Corte'},
-        {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
-        {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
-    ]
-    st.rerun()
-
 # --- Panel de Resultados ---
 if 'results' in st.session_state and st.session_state.results:
     linea_res = st.session_state.results['linea_obj']
-    st.markdown("---")
-    st.header("📊 Resultados de la Optimización")
-    kpi_cols = st.columns(5)
-    kpi_cols[0].metric("Eficiencia", f"{linea_res.eficiencia_linea:.1f}%")
-    kpi_cols[1].metric("Tiempo de Ciclo", f"{linea_res.tiempo_ciclo_calculado:.2f} min/ud")
-    kpi_cols[2].metric("Tasa de Producción", f"{linea_res.tasa_produccion:.1f} uds/hr")
-    kpi_cols[3].metric("Tiempo Total", f"{linea_res.tiempo_produccion_total_estimado:.1f} min")
-    kpi_cols[4].metric("Tiempo Inactivo", f"{linea_res.tiempo_inactivo_total:.1f} min")
+    
+    # Rellenar el botón de descarga en el panel de control superior
+    with download_placeholder:
+        st.download_button("📄 PDF", generar_reporte_pdf(linea_res), "reporte.pdf", "application/pdf", use_container_width=True)
 
-    tab1, tab2, tab3 = st.tabs(["📈 **Análisis y Sugerencias**", "📋 **Tabla CPM**", "🧑‍💼 **Asignación de Personal**"])
-    with tab1:
-        cb_nombre = linea_res.cuello_botella_info.get('nombre', 'N/A')
-        st.info(f"**Cuello de Botella:** Estación **'{cb_nombre}'** ({linea_res.tiempo_ciclo_calculado:.2f} min).", icon="⚠️")
-        candidatas = sorted([est for est in linea_res.estaciones_lista if not est.es_critica], key=lambda x: x.holgura, reverse=True)
-        if linea_res.eficiencia_linea < 85 and candidatas:
-            st.warning(f"**Sugerencia:** Mover tareas desde '{cb_nombre}' hacia **'{candidatas[0].nombre}'** (holgura de {candidatas[0].holgura:.2f} min) para mejorar el balance.", icon="🛠️")
-    with tab2:
-        st.dataframe([{"Estación": est.nombre, "Tiempo": est.tiempo, "ES": est.es, "EF": est.ef, "LS": est.ls, "LF": est.lf, "Holgura": f"{est.holgura:.2f}", "Crítica": "🔴 Sí" if est.es_critica else "🟢 No"} for est in linea_res.estaciones_lista])
-    with tab3:
-        st.dataframe(linea_res.empleados_asignados_por_estacion)
+    with st.container(border=True):
+        st.header("📊 Resultados de la Optimización")
+        kpi_cols = st.columns(5)
+        kpi_cols[0].metric("Eficiencia", f"{linea_res.eficiencia_linea:.1f}%", f"{linea_res.eficiencia_linea-100:.1f}%")
+        kpi_cols[1].metric("Tiempo de Ciclo", f"{linea_res.tiempo_ciclo_calculado:.2f} min/ud")
+        kpi_cols[2].metric("Tasa de Producción", f"{linea_res.tasa_produccion:.1f} uds/hr")
+        kpi_cols[3].metric("Tiempo Total", f"{linea_res.tiempo_produccion_total_estimado:.1f} min")
+        kpi_cols[4].metric("Tiempo Inactivo", f"{linea_res.tiempo_inactivo_total:.1f} min")
 
-# --- Pie de Página con Información del Autor ---
-st.divider()
-st.markdown("##### Autor")
-st.write("**Joseph Javier Sánchez Acuña**")
-st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
-st.markdown("---")
-st.markdown("##### Contacto")
-st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
-st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
-st.write("📧 joseph.sanchez@uniminuto.edu.co")
+        tab1, tab2, tab3 = st.tabs(["📈 **Análisis y Sugerencias**", "📋 **Tabla CPM**", "🧑‍💼 **Asignación de Personal**"])
+        with tab1:
+            cb_nombre = linea_res.cuello_botella_info.get('nombre', 'N/A')
+            st.info(f"**Cuello de Botella:** Estación **'{cb_nombre}'** ({linea_res.tiempo_ciclo_calculado:.2f} min).", icon="⚠️")
+            candidatas = sorted([est for est in linea_res.estaciones_lista if not est.es_critica], key=lambda x: x.holgura, reverse=True)
+            if linea_res.eficiencia_linea < 85 and candidatas:
+                st.warning(f"**Sugerencia:** Mover tareas desde '{cb_nombre}' hacia **'{candidatas[0].nombre}'** (holgura de {candidatas[0].holgura:.2f} min) para mejorar el balance.", icon="🛠️")
+        with tab2:
+            st.dataframe([{"Estación": est.nombre, "Tiempo": est.tiempo, "ES": est.es, "EF": est.ef, "LS": est.ls, "LF": est.lf, "Holgura": f"{est.holgura:.2f}", "Crítica": "🔴 Sí" if est.es_critica else "🟢 No"} for est in linea_res.estaciones_lista])
+        with tab3:
+            st.dataframe(linea_res.empleados_asignados_por_estacion)
+
+# --- Pie de Página ---
+with st.container(border=True):
+    col1, col2 = st.columns([1,2])
+    with col1:
+        st.markdown("##### **Autor**")
+        st.write("**Joseph Javier Sánchez Acuña**")
+        st.write("_Ing. Industrial, Experto en IA y Software._")
+    with col2:
+        st.markdown("##### **Contacto**")
+        st.write(
+            "🔗 [LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275) &nbsp;&nbsp;"
+            "📂 [GitHub](https://github.com/GIUSEPPESAN21) &nbsp;&nbsp;"
+            "📧 joseph.sanchez@uniminuto.edu.co"
+        )
 
