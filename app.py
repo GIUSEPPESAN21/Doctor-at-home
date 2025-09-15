@@ -1,380 +1,320 @@
 # -*- coding: utf-8 -*-
-"""
-Suite de Diagnóstico Integral
-Versión: 21.0 ("Final UI")
-Descripción: Versión final que refina la interfaz de usuario moviendo la
-sección "Acerca de" desde la página de login a una nueva pestaña dedicada en
-el panel de control principal y eliminando la información de versión para
-lograr un diseño más limpio y profesional.
-"""
-# --- LIBRERÍAS ---
+
 import streamlit as st
-import pandas as pd
-from datetime import datetime, timezone
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-import google.generativeai as genai
+import datetime
+import matplotlib
+matplotlib.use('Agg') # Backend para entornos sin GUI
+import matplotlib.pyplot as plt
 from io import BytesIO
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib.units import inch
+import random
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(
-    page_title="Suite Clínica Definitiva",
-    page_icon="🩺",
-    layout="wide"
-)
+# --- Importaciones para PDF y Twilio ---
+try:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
+    from reportlab.lib.styles import getSampleStyleSheet
+    from reportlab.lib.units import inch
+    from reportlab.lib import colors
+    IS_PDF_AVAILABLE = True
+except ImportError:
+    IS_PDF_AVAILABLE = False
 
-# ==============================================================================
-# MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
-# ==============================================================================
-@st.cache_resource
-def init_connections():
-    try:
-        creds_dict = dict(st.secrets["firebase_credentials"])
-        creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
-        if not firebase_admin._apps:
-            creds = credentials.Certificate(creds_dict)
-            firebase_admin.initialize_app(creds)
-        db_client = firestore.client()
-    except Exception as e:
-        st.error(f"Error crítico al conectar con Firebase: {e}", icon="🔥")
-        db_client = None
+try:
+    from twilio.rest import Client
+    from twilio.base.exceptions import TwilioRestException
+    IS_TWILIO_AVAILABLE = True
+except ImportError:
+    IS_TWILIO_AVAILABLE = False
+    Client, TwilioRestException = None, None
 
-    try:
-        api_key = st.secrets["gemini_api_key"]
-        genai.configure(api_key=api_key)
-        model_client = genai.GenerativeModel('gemini-1.5-flash-latest')
-    except Exception as e:
-        st.error(f"Error crítico al configurar el modelo de IA: {e}", icon="🤖")
-        model_client = None
-    return db_client, model_client
+# --- Lógica de Negocio (Clases sin cambios) ---
+class Estacion:
+    """Representa una estación de trabajo."""
+    def __init__(self, nombre, tiempo, predecesora_nombre=""):
+        if not isinstance(tiempo, (int, float)) or tiempo <= 0:
+            raise ValueError(f"El tiempo para la estación '{nombre}' debe ser un número positivo.")
+        self.nombre = nombre
+        self.tiempo = float(tiempo)
+        self.predecesora_nombre = predecesora_nombre
+        self.es, self.ef, self.ls, self.lf, self.holgura = 0.0, 0.0, 0.0, 0.0, 0.0
+        self.es_critica = False
 
-DB, GEMINI_MODEL = init_connections()
+class LineaProduccion:
+    """Gestiona los cálculos de la línea de producción con métricas avanzadas."""
+    def __init__(self, estaciones_data, unidades, empleados):
+        self.estaciones_dict = {}
+        self.estaciones_lista = []
+        self._procesar_estaciones_data(estaciones_data)
+        self.unidades_a_producir = unidades
+        self.num_empleados_disponibles = empleados
+        self.tiempo_total_camino_critico = 0.0
+        self.camino_critico_nombres = []
+        self.tiempo_ciclo_calculado = 0.0
+        self.tiempo_produccion_total_estimado = 0.0
+        self.eficiencia_linea = 0.0
+        self.cuello_botella_info = {}
+        self.empleados_asignados_por_estacion = []
+        self.tasa_produccion = 0.0
+        self.tiempo_inactivo_total = 0.0
 
-# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
-if 'logged_in' not in st.session_state:
-    st.session_state.logged_in = False
-    st.session_state.physician_email = None
-    st.session_state.page = 'login'
-    st.session_state.selected_patient_id = None
-    st.session_state.ai_analysis_running = False
-    st.session_state.last_clicked_ai = None
+    def _procesar_estaciones_data(self, estaciones_data):
+        nombres_vistos = set()
+        for data in estaciones_data:
+            nombre = data.get("nombre")
+            if not nombre: raise ValueError("Todas las estaciones deben tener un nombre.")
+            if nombre.lower() in nombres_vistos: raise ValueError(f"Nombre de estación duplicado: '{nombre}'.")
+            nombres_vistos.add(nombre.lower())
+            est = Estacion(nombre, data.get("tiempo"), data.get("predecesora", ""))
+            self.estaciones_lista.append(est)
+            self.estaciones_dict[nombre] = est
+        for est in self.estaciones_lista:
+            if est.predecesora_nombre and est.predecesora_nombre not in self.estaciones_dict:
+                raise ValueError(f"La predecesora '{est.predecesora_nombre}' para '{est.nombre}' no existe.")
 
-# ==============================================================================
-# MÓDULO 2: LÓGICA DE DATOS (FIRESTORE)
-# ==============================================================================
-def get_physician_patients(physician_email):
-    if not DB: return []
-    patients_ref = DB.collection('physicians').document(physician_email).collection('patients').stream()
-    return [{'id': doc.id, **doc.to_dict()} for doc in patients_ref]
+    def calcular_cpm(self):
+        for est in self.estaciones_lista:
+            pred = self.estaciones_dict.get(est.predecesora_nombre)
+            est.es = pred.ef if pred else 0
+            est.ef = est.es + est.tiempo
+        self.tiempo_total_camino_critico = max((est.ef for est in self.estaciones_lista), default=0.0)
+        for est in reversed(self.estaciones_lista):
+            sucesores = [s for s in self.estaciones_lista if s.predecesora_nombre == est.nombre]
+            est.lf = min((s.ls for s in sucesores), default=self.tiempo_total_camino_critico)
+            est.ls = est.lf - est.tiempo
+            est.holgura = est.ls - est.es
+            if abs(est.holgura) < 1e-6:
+                est.es_critica = True
+        self.camino_critico_nombres = sorted([est.nombre for est in self.estaciones_lista if est.es_critica])
+        if self.estaciones_lista:
+            cuello_botella = max(self.estaciones_lista, key=lambda e: e.tiempo)
+            self.cuello_botella_info = {"nombre": cuello_botella.nombre, "tiempo_proceso_individual": cuello_botella.tiempo}
 
-def save_new_patient(physician_email, patient_data):
-    if not DB: return
-    DB.collection('physicians').document(physician_email).collection('patients').document(patient_data['cedula']).set(patient_data)
-    st.success(f"Paciente {patient_data['nombre']} registrado exitosamente.")
+    def calcular_metricas_avanzadas(self):
+        tiempo_cuello_botella = self.cuello_botella_info.get("tiempo_proceso_individual", 0)
+        self.tiempo_ciclo_calculado = tiempo_cuello_botella
+        if self.unidades_a_producir > 0 and tiempo_cuello_botella > 0:
+            self.tiempo_produccion_total_estimado = self.tiempo_total_camino_critico + (self.unidades_a_producir - 1) * tiempo_cuello_botella
+            self.tasa_produccion = 60 / tiempo_cuello_botella # Unidades por hora
+        else:
+            self.tiempo_produccion_total_estimado = self.tiempo_total_camino_critico
+            self.tasa_produccion = 0.0
+        
+        sum_tiempos = sum(est.tiempo for est in self.estaciones_lista)
+        denominador = len(self.estaciones_lista) * tiempo_cuello_botella
+        self.eficiencia_linea = (sum_tiempos / denominador) * 100 if denominador > 0 else 0.0
+        self.tiempo_inactivo_total = sum(est.holgura for est in self.estaciones_lista if not est.es_critica)
 
-def save_consultation(physician_email, patient_id, consultation_data):
-    if not DB: return None
-    timestamp = datetime.now(timezone.utc)
-    doc_id = timestamp.strftime('%Y-%m-%d_%H-%M-%S')
-    consultation_data['timestamp_utc'] = timestamp.isoformat()
-    clean_data = {k: v for k, v in consultation_data.items() if v is not None and v != ''}
-    DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(doc_id).set(clean_data)
-    st.toast("Consulta guardada.", icon="✅")
-    return doc_id
-
-def update_consultation_with_ai_analysis(physician_email, patient_id, consultation_id, ai_report):
-    if not DB: return
-    consultation_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(consultation_id)
-    consultation_ref.update({"ai_analysis": ai_report})
-    st.toast("Análisis de IA guardado en el historial.", icon="🧠")
-
-def load_patient_history(physician_email, patient_id):
-    if not DB: return pd.DataFrame()
-    consultations_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').order_by('timestamp_utc', direction=firestore.Query.DESCENDING).stream()
-    records = []
-    for doc in consultations_ref:
-        record = doc.to_dict()
-        record['id'] = doc.id
-        records.append(record)
-    if not records: return pd.DataFrame()
-    df = pd.DataFrame(records)
-    df['timestamp'] = pd.to_datetime(df['timestamp_utc'])
-    return df
-
-# ==============================================================================
-# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
-# ==============================================================================
-@st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
-def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
-    if not GEMINI_MODEL: return "Servicio de IA no disponible."
+    def asignar_empleados(self):
+        total_tiempo = sum(est.tiempo for est in self.estaciones_lista)
+        if total_tiempo == 0 or self.num_empleados_disponibles == 0:
+            self.empleados_asignados_por_estacion = [{"nombre": e.nombre, "empleados": 0} for e in self.estaciones_lista]
+            return
+        asignaciones = [{'nombre': e.nombre, 'ideal': e.tiempo / total_tiempo * self.num_empleados_disponibles} for e in self.estaciones_lista]
+        for a in asignaciones: a['base'], a['fraccion'] = int(a['ideal']), a['ideal'] - int(a['ideal'])
+        restantes = self.num_empleados_disponibles - sum(a['base'] for a in asignaciones)
+        asignaciones.sort(key=lambda x: x['fraccion'], reverse=True)
+        for i in range(min(restantes, len(asignaciones))): asignaciones[i]['base'] += 1
+        mapa = {a['nombre']: a['base'] for a in asignaciones}
+        self.empleados_asignados_por_estacion = [{"nombre": e.nombre, "empleados": mapa.get(e.nombre, 0)} for e in self.estaciones_lista]
     
-    prompt = f"""
-    **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente para generar un reporte clínico estructurado, profesional y accionable.
+    def ejecutar_calculos(self):
+        self.calcular_cpm()
+        self.calcular_metricas_avanzadas()
+        self.asignar_empleados()
 
-    **CONTEXTO DEL PACIENTE:**
-    - Nombre: {str(_patient_info.get('nombre', 'No especificado'))}
-    - Edad: {str(_patient_info.get('edad', 'No especificada'))} años
-    
-    **DATOS DE LA CONSULTA ACTUAL:**
-    - Motivo: {str(_latest_consultation.get('motivo_consulta', 'No especificado'))}
-    - Signos Vitales: PA {str(_latest_consultation.get('presion_sistolica', 'N/A'))}/{str(_latest_consultation.get('presion_diastolica', 'N/A'))} mmHg, Glucemia {str(_latest_consultation.get('glucemia', 'N/A'))} mg/dL, IMC {str(_latest_consultation.get('imc', 'N/A'))} kg/m².
-    - Síntomas Relevantes: Cardiovascular({str(_latest_consultation.get('sintomas_cardio', []))}), Respiratorio({str(_latest_consultation.get('sintomas_resp', []))}), Metabólico({str(_latest_consultation.get('sintomas_metabolico', []))})
+# --- Lógica de Twilio Reintegrada ---
+LOW_EFFICIENCY_THRESHOLD = 85
 
-    **RESUMEN DEL HISTORIAL PREVIO:**
-    {_history_summary}
-
-    **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
-
-    ### Análisis Clínico Integral por IA
-
-    **1. RESUMEN DEL CASO:**
-    (Presenta un resumen conciso del paciente, su edad, y el motivo de la consulta actual en el contexto de su historial.)
-
-    **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
-    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales que deberían ser considerados y por qué.)
-
-    **3. ESTRATIFICACIÓN DEL RIESGO:**
-    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica tu respuesta basándote en los datos.)
-
-    **4. PLAN DE MANEJO SUGERIDO:**
-    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos.)
-    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida.)
-    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica.)
-    - **Metas Terapéuticas:** (Establece objetivos numéricos claros.)
-
-    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
-    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente.)
-    """
+def inicializar_twilio_client():
+    if not IS_TWILIO_AVAILABLE: return None
     try:
-        response = GEMINI_MODEL.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"**Error al generar recomendaciones:** {e}"
+        if hasattr(st, 'secrets') and all(k in st.secrets for k in ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]):
+            account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
+            auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
+            if account_sid.startswith("AC") and len(auth_token) > 30:
+                st.session_state.twilio_configured = True
+                return Client(account_sid, auth_token)
+    except Exception:
+        pass # Silently fail if secrets are not valid
+    st.session_state.twilio_configured = False
+    return None
 
-# ==============================================================================
-# MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
-# ==============================================================================
-def create_patient_report_pdf(patient_info, history_df):
+def enviar_alerta_whatsapp(mensaje):
+    if 'twilio_client' not in st.session_state or not st.session_state.twilio_client:
+        return
+
+    if not st.session_state.get('twilio_configured'):
+        st.warning("Las credenciales de Twilio no están configuradas en los Secrets. No se pueden enviar alertas.", icon="⚠️")
+        return
+        
+    try:
+        from_number = st.secrets["TWILIO_WHATSAPP_FROM_NUMBER"]
+        to_number = st.secrets["DESTINATION_WHATSAPP_NUMBER"]
+        
+        # Prefijo obligatorio para cuentas de prueba (Trial Account)
+        codigo_aleatorio = random.randint(100000, 999999)
+        mensaje_final = f"Your Twilio code is {codigo_aleatorio}\n\n{mensaje}"
+
+        st.session_state.twilio_client.messages.create(
+            from_=f'whatsapp:{from_number}',
+            body=mensaje_final,
+            to=f'whatsapp:{to_number}'
+        )
+        st.toast(f"¡Alerta de baja eficiencia enviada a {to_number}!", icon="✅")
+    
+    except TwilioRestException as e:
+        st.error(f"Error de Twilio: {e.msg}", icon="🚨")
+        if e.code == 21608:
+            st.warning("Error 21608: El número de destino no está verificado. Reactiva tu Sandbox de WhatsApp.", icon="📱")
+    except Exception as e:
+        st.error(f"Error inesperado al enviar WhatsApp: {e}", icon="🚨")
+
+# --- Funciones de Generación (Gráficos, PDF) ---
+def generar_graficos(linea_obj):
+    fig_pie, ax1 = plt.subplots(figsize=(5, 4))
+    ax1.pie([e.tiempo for e in linea_obj.estaciones_lista], labels=[e.nombre for e in linea_obj.estaciones_lista], autopct='%1.1f%%', startangle=90)
+    ax1.axis('equal')
+    ax1.set_title('Distribución de Tiempos')
+    plt.tight_layout()
+    
+    fig_bar, ax2 = plt.subplots(figsize=(5, 4))
+    ax2.bar([a['nombre'] for a in linea_obj.empleados_asignados_por_estacion], [a['empleados'] for a in linea_obj.empleados_asignados_por_estacion], color='skyblue')
+    ax2.set_title('Asignación de Empleados')
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+    return fig_pie, fig_bar
+
+def generar_reporte_pdf(linea_obj):
+    if not IS_PDF_AVAILABLE: return None
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer)
+    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=inch*0.5, bottomMargin=inch*0.5)
     styles = getSampleStyleSheet()
     story = []
-
-    story.append(Paragraph(str(patient_info.get('nombre', 'N/A')), styles['h1']))
-    story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
-    story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
-    story.append(Paragraph(f"Dirección: {patient_info.get('direccion', 'N/A')}", styles['Normal']))
-    story.append(Spacer(1, 0.25*inch))
-
-    for _, row in history_df.sort_values('timestamp').iterrows():
-        story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
-        motivo = str(row.get('motivo_consulta', 'N/A')).replace('\n', '<br/>')
-        story.append(Paragraph(f"<b>Motivo:</b> {motivo}", styles['Normal']))
-        pa_s = str(row.get('presion_sistolica', 'N/A'))
-        pa_d = str(row.get('presion_diastolica', 'N/A'))
-        gluc = str(row.get('glucemia', 'N/A'))
-        imc = str(row.get('imc', 'N/A'))
-        vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
-        story.append(Paragraph(vitales, styles['Normal']))
-        if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-            story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
-            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('*', '- ')
-            story.append(Paragraph(analysis_text, styles['Normal']))
-        story.append(Spacer(1, 0.25*inch))
-    
+    story.append(Paragraph("Reporte de Optimización de Línea", styles['h1']))
+    story.append(Spacer(1, 0.2*inch))
+    kpi_data = [
+        ["Eficiencia de Línea:", f"{linea_obj.eficiencia_linea:.2f}%"], ["Tiempo de Ciclo:", f"{linea_obj.tiempo_ciclo_calculado:.2f} min/ud"],
+        ["Tasa de Producción:", f"{linea_obj.tasa_produccion:.2f} uds/hora"], ["Tiempo Inactivo Total:", f"{linea_obj.tiempo_inactivo_total:.2f} min"]
+    ]
+    story.append(Table(kpi_data, style=[('ALIGN', (0,0), (-1,-1), 'LEFT'), ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold')]))
+    story.append(Spacer(1, 0.2*inch))
+    story.append(Paragraph("Detalle de la Ruta Crítica (CPM)", styles['h2']))
+    cpm_header = ["Estación", "Tiempo", "ES", "EF", "LS", "LF", "Holgura", "Crítica"]
+    cpm_data = [cpm_header] + [[est.nombre, f"{est.tiempo:.2f}", f"{est.es:.2f}", f"{est.ef:.2f}", f"{est.ls:.2f}", f"{est.lf:.2f}", f"{est.holgura:.2f}", "Sí" if est.es_critica else "No"] for est in linea_obj.estaciones_lista]
+    story.append(Table(cpm_data, style=[('BACKGROUND', (0,0), (-1,0), colors.grey), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
+    fig_pie, fig_bar = generar_graficos(linea_obj)
+    charts = []
+    for fig in [fig_pie, fig_bar]:
+        if fig:
+            buf = BytesIO()
+            fig.savefig(buf, format='PNG', dpi=300)
+            buf.seek(0)
+            charts.append(Image(buf, width=3.5*inch, height=2.8*inch))
+    if charts: story.append(Table([charts]))
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
-# ==============================================================================
-# MÓDULO 5: VISTAS Y COMPONENTES DE UI
-# ==============================================================================
-def render_login_page():
-    st.title("Plataforma de Gestión Clínica")
-    
-    # --- CAMBIO: Formulario de login centrado y sin columnas ---
-    with st.container(border=True):
-      with st.form("login_form"):
-          email = st.text_input("Correo Electrónico del Médico")
-          password = st.text_input("Contraseña", type="password")
-          login_button = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
-          register_button = st.form_submit_button("Registrarse", use_container_width=True)
-          
-      if login_button:
-          try:
-              user = auth.get_user_by_email(email)
-              st.session_state.logged_in = True
-              st.session_state.physician_email = user.email
-              st.session_state.page = 'control_panel'
-              st.rerun()
-          except Exception as e: st.error(f"Error de inicio de sesión: {e}")
-      if register_button:
-          try:
-              user = auth.create_user(email=email, password=password)
-              st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
-          except Exception as e: st.error(f"Error de registro: {e}")
+# --- Configuración Inicial y Estado ---
+st.set_page_config(page_title="Optimizador de Líneas", layout="wide", page_icon="🏭")
 
-def render_main_app():
-    with st.sidebar:
-        st.header("Menú del Médico")
-        st.write(st.session_state.get('physician_email', 'Cargando...'))
-        st.divider()
-        if st.button("Panel de Control", use_container_width=True):
-            st.session_state.page = 'control_panel'
-            st.session_state.selected_patient_id = None
+if 'estaciones' not in st.session_state:
+    st.session_state.estaciones = [
+        {'nombre': 'Corte', 'tiempo': 2.0, 'predecesora': ''}, {'nombre': 'Doblado', 'tiempo': 3.0, 'predecesora': 'Corte'},
+        {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
+        {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
+    ]
+
+if 'twilio_client' not in st.session_state:
+    st.session_state.twilio_client = inicializar_twilio_client()
+
+# --- Interfaz de Usuario Principal ---
+st.title("🏭 Optimizador Avanzado de Líneas de Producción")
+
+with st.expander("⚙️ Configurar Simulación, Estaciones y Autor", expanded=True):
+    col_params, col_actions = st.columns([1, 1])
+    with col_params:
+        unidades = st.number_input("Unidades a Producir", 1, value=100, step=10)
+        empleados = st.number_input("Empleados Disponibles", 1, value=5, step=1)
+    with col_actions:
+        st.subheader("Gestionar Estaciones")
+        c1, c2 = st.columns(2)
+        if c1.button("➕ Añadir Estación", use_container_width=True):
+            st.session_state.estaciones.append({'nombre': '', 'tiempo': 1.0, 'predecesora': ''})
             st.rerun()
-        st.divider()
-        if st.button("Cerrar Sesión", use_container_width=True):
-            st.session_state.logged_in = False
+        if c2.button("➖ Quitar Última", use_container_width=True, disabled=len(st.session_state.estaciones) <= 1):
+            st.session_state.estaciones.pop()
             st.rerun()
-        
-    if st.session_state.page == 'control_panel':
-        render_control_panel()
-    elif st.session_state.page == 'patient_dashboard':
-        render_patient_dashboard()
 
-def render_control_panel():
-    st.title("Panel de Control Médico")
-
-    # --- CAMBIO: Nueva pestaña "Acerca de" ---
-    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
-
-    with tab1:
-        st.header("Registrar Nuevo Paciente")
-        with st.form("new_patient_form", clear_on_submit=True):
-            c1, c2, c3 = st.columns(3)
-            nombre = c1.text_input("Nombres Completos")
-            cedula = c2.text_input("Documento de Identidad (ID único)")
-            edad = c3.number_input("Edad", min_value=0, max_value=120)
-            direccion = st.text_input("Dirección de Residencia")
-            telefono = st.text_input("Teléfono")
-            submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
-            if submitted and nombre and cedula:
-                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
-                st.rerun()
-        
-        st.divider()
-        st.header("Seleccionar Paciente Existente")
-        patients = get_physician_patients(st.session_state.physician_email)
-        if not patients:
-            st.info("No hay pacientes registrados. Agregue uno nuevo para comenzar.")
-        else:
-            for patient in patients:
-                col1, col2, col3 = st.columns([3, 2, 1])
-                col1.subheader(patient['nombre'])
-                col2.text(f"ID: {patient['cedula']}")
-                if col3.button("Ver Historial", key=patient['id'], use_container_width=True):
-                    st.session_state.selected_patient_id = patient['id']
-                    st.session_state.page = 'patient_dashboard'
-                    st.rerun()
-
-    # --- CAMBIO: Contenido movido a la nueva pestaña ---
-    with tab2:
-        st.markdown("### Acerca de esta Herramienta")
-        st.markdown(
-            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
-            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
-            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
-        )
-        st.divider()
-        st.markdown("##### Autor")
-        st.write("**Joseph Javier Sánchez Acuña**")
-        st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
-        st.markdown("---")
-        st.markdown("##### Contacto")
-        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
-        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
-        st.write("📧 joseph.sanchez@uniminuto.edu.co")
-
-def render_patient_dashboard():
-    patient_id = st.session_state.selected_patient_id
-    patient_info = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id).get().to_dict()
-    st.title(f"Dashboard Clínico de: {patient_info.get('nombre', 'N/A')}")
-    st.caption(f"Documento: {patient_info.get('cedula', 'N/A')} | Edad: {patient_info.get('edad', 'N/A')} años")
+    st.subheader("Definición de Estaciones")
+    cols = st.columns(max(1, len(st.session_state.estaciones)))
+    for i, est in enumerate(st.session_state.estaciones):
+        with cols[i % len(cols)]:
+            st.markdown(f"**Estación {i+1}**")
+            st.session_state.estaciones[i]['nombre'] = st.text_input("Nombre", est['nombre'], key=f"nombre_{i}")
+            st.session_state.estaciones[i]['tiempo'] = st.number_input("Tiempo (min)", 0.01, value=est['tiempo'], key=f"tiempo_{i}")
+            opts = [""] + [e['nombre'] for j, e in enumerate(st.session_state.estaciones) if i != j and e['nombre']]
+            st.session_state.estaciones[i]['predecesora'] = st.selectbox("Predecesora", opts, index=(opts.index(est['predecesora']) if est['predecesora'] in opts else 0), key=f"pred_{i}")
     
-    df_history = load_patient_history(st.session_state.physician_email, patient_id)
+    # --- Información del Autor ---
+    st.divider()
+    st.markdown("##### Autor")
+    st.write("**Joseph Javier Sánchez Acuña**")
+    st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
+    st.markdown("---")
+    st.markdown("##### Contacto")
+    st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+    st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+    st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
-    if not df_history.empty:
-        pdf_data = create_patient_report_pdf(patient_info, df_history)
-        st.download_button(
-            label="📄 Descargar Reporte Completo en PDF",
-            data=pdf_data,
-            file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf",
-            mime="application/pdf",
-        )
 
-    tab1, tab2 = st.tabs(["📈 Historial de Consultas", "✍️ Registrar Nueva Consulta"])
+c1, c2, c3 = st.columns([2, 1, 1])
+if c1.button("🚀 Calcular y Optimizar", type="primary", use_container_width=True):
+    try:
+        linea = LineaProduccion(st.session_state.estaciones, unidades, empleados)
+        linea.ejecutar_calculos()
+        st.session_state.results = {"linea_obj": linea}
+        st.success("¡Análisis completado!")
+        if linea.eficiencia_linea < LOW_EFFICIENCY_THRESHOLD:
+            mensaje = f"¡Alerta de Producción! 📉\nEficiencia: *{linea.eficiencia_linea:.1f}%*.\nCuello de botella: '{linea.cuello_botella_info.get('nombre', 'N/A')}'."
+            enviar_alerta_whatsapp(mensaje)
+    except Exception as e:
+        st.error(f"Error en el cálculo: {e}")
+        st.session_state.results = None
 
+if 'results' in st.session_state and st.session_state.results:
+    if c2.download_button("📄 Descargar Reporte PDF", generar_reporte_pdf(st.session_state.results['linea_obj']), "reporte.pdf", "application/pdf", use_container_width=True):
+        pass
+
+if c3.button("🔄 Resetear", use_container_width=True):
+    st.session_state.results = None
+    st.session_state.estaciones = [
+        {'nombre': 'Corte', 'tiempo': 2.0, 'predecesora': ''}, {'nombre': 'Doblado', 'tiempo': 3.0, 'predecesora': 'Corte'},
+        {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
+        {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
+    ]
+    st.rerun()
+
+if 'results' in st.session_state and st.session_state.results:
+    linea_res = st.session_state.results['linea_obj']
+    st.markdown("---")
+    st.header("📊 Resultados de la Optimización")
+    kpi_cols = st.columns(5)
+    kpi_cols[0].metric("Eficiencia", f"{linea_res.eficiencia_linea:.1f}%")
+    kpi_cols[1].metric("Tiempo de Ciclo", f"{linea_res.tiempo_ciclo_calculado:.2f} min/ud")
+    kpi_cols[2].metric("Tasa de Producción", f"{linea_res.tasa_produccion:.1f} uds/hr")
+    kpi_cols[3].metric("Tiempo Total", f"{linea_res.tiempo_produccion_total_estimado:.1f} min")
+    kpi_cols[4].metric("Tiempo Inactivo", f"{linea_res.tiempo_inactivo_total:.1f} min")
+
+    tab1, tab2, tab3 = st.tabs(["📈 **Análisis y Sugerencias**", "📋 **Tabla CPM**", "🧑‍💼 **Asignación de Personal**"])
     with tab1:
-        if df_history.empty:
-            st.info("Este paciente no tiene consultas.")
-        else:
-            if st.session_state.ai_analysis_running:
-                consultation_id_to_process = st.session_state.last_clicked_ai
-                row_to_process = df_history[df_history['id'] == consultation_id_to_process].iloc[0]
-                history_summary = "..."
-                with st.spinner("Contactando al asistente de IA..."):
-                    ai_report = generate_ai_holistic_review(patient_info, row_to_process.to_dict(), history_summary)
-                    update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id_to_process, ai_report)
-                st.session_state.ai_analysis_running = False
-                st.session_state.last_clicked_ai = None
-                st.rerun()
-
-            for _, row in df_history.iterrows():
-                with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
-                    st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
-                    if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-                        st.markdown(row['ai_analysis'])
-                    else:
-                        button_key = f"ai_{row['id']}"
-                        if st.button("Generar Análisis con IA", key=button_key, disabled=st.session_state.ai_analysis_running):
-                            st.session_state.ai_analysis_running = True
-                            st.session_state.last_clicked_ai = row['id']
-                            st.rerun()
-
+        cb_nombre = linea_res.cuello_botella_info.get('nombre', 'N/A')
+        st.info(f"**Cuello de Botella:** Estación **'{cb_nombre}'** ({linea_res.tiempo_ciclo_calculado:.2f} min).", icon="⚠️")
+        candidatas = sorted([est for est in linea_res.estaciones_lista if not est.es_critica], key=lambda x: x.holgura, reverse=True)
+        if linea_res.eficiencia_linea < 85 and candidatas:
+            st.warning(f"**Sugerencia:** Mover tareas desde '{cb_nombre}' hacia **'{candidatas[0].nombre}'** (holgura de {candidatas[0].holgura:.2f} min) para mejorar el balance.", icon="🛠️")
     with tab2:
-        with st.form("new_consultation_form"):
-            st.header("Datos de la Consulta")
-            with st.expander("1. Anamnesis y Vitales", expanded=True):
-                motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                presion_sistolica = c1.number_input("PA Sistólica", min_value=0)
-                presion_diastolica = c2.number_input("PA Diastólica", min_value=0)
-                frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
-                glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
-                imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
-            with st.expander("2. Revisión por Sistemas (Síntomas)"):
-                sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
-                sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
-                sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
-            with st.expander("3. Factores de Riesgo y Estilo de Vida"):
-                c1, c2 = st.columns(2)
-                dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
-                ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
-            submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
-            if submitted:
-                consultation_data = {
-                    "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
-                    "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc,
-                    "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
-                    "dieta": dieta, "ejercicio": ejercicio
-                }
-                save_consultation(st.session_state.physician_email, patient_id, consultation_data)
-                st.rerun()
-
-# ==============================================================================
-# MÓDULO 6: CONTROLADOR PRINCIPAL
-# ==============================================================================
-def main():
-    if st.session_state.get('logged_in', False):
-        render_main_app()
-    else:
-        render_login_page()
-
-if __name__ == "__main__":
-    main()
+        st.dataframe([{"Estación": est.nombre, "Tiempo": est.tiempo, "ES": est.es, "EF": est.ef, "LS": est.ls, "LF": est.lf, "Holgura": f"{est.holgura:.2f}", "Crítica": "🔴 Sí" if est.es_critica else "🟢 No"} for est in linea_res.estaciones_lista])
+    with tab3:
+        st.dataframe(linea_res.empleados_asignados_por_estacion)
 
