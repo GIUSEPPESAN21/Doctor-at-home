@@ -1,267 +1,380 @@
 # -*- coding: utf-8 -*-
 """
-Aplicación de Tamizaje de Múltiples Enfermedades
-Versión: 5.0.1 (Estable, Unificada, Flujo Corregido)
-Descripción: Versión final que consolida toda la lógica en un solo archivo,
-corrige el flujo de envío del formulario y elimina el sidebar para una
-experiencia de usuario directa y funcional.
+Suite de Diagnóstico Integral
+Versión: 21.0 ("Final UI")
+Descripción: Versión final que refina la interfaz de usuario moviendo la
+sección "Acerca de" desde la página de login a una nueva pestaña dedicada en
+el panel de control principal y eliminando la información de versión para
+lograr un diseño más limpio y profesional.
 """
-
-# --- LIBRERÍAS PRINCIPALES ---
+# --- LIBRERÍAS ---
 import streamlit as st
 import pandas as pd
-import numpy as np
-import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 import firebase_admin
-from firebase_admin import credentials, firestore
-import altair as alt
+from firebase_admin import credentials, firestore, auth
+import google.generativeai as genai
+from io import BytesIO
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib.units import inch
 
-# --- CONFIGURACIÓN DE LA PÁGINA ---
+# --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Tamizaje de Salud Integral",
-    page_icon="⚕️",
+    page_title="Suite Clínica Definitiva",
+    page_icon="🩺",
     layout="wide"
 )
 
-# --- CONSTANTES ---
-APP_VERSION = "5.0.1"
-
 # ==============================================================================
-# MÓDULO 1: LÓGICA DE FIREBASE
+# MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
 # ==============================================================================
-
-def check_firestore_credentials() -> bool:
-    """Verifica si las credenciales de Firebase están en los Secrets."""
-    return "firebase_credentials" in st.secrets
-
 @st.cache_resource
-def init_firestore():
-    """Inicializa la conexión con Firestore."""
+def init_connections():
     try:
-        creds_dict = st.secrets["firebase_credentials"]
-        creds = credentials.Certificate(creds_dict)
-        try:
+        creds_dict = dict(st.secrets["firebase_credentials"])
+        creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
+        if not firebase_admin._apps:
+            creds = credentials.Certificate(creds_dict)
             firebase_admin.initialize_app(creds)
-        except ValueError:
-            pass # App ya inicializada
-        return firestore.client()
-    except Exception:
-        return None
-
-def save_evaluation_to_firestore(db, patient_id: str, timestamp: str, data: dict):
-    """Guarda una evaluación en Firestore."""
-    if db:
-        try:
-            doc_id = f"{patient_id}_{timestamp}"
-            record_ref = db.collection('evaluations').document(doc_id)
-            record_ref.set(data)
-            st.toast("Evaluación guardada en la base de datos.")
-        except Exception as e:
-            st.error(f"Error al guardar en Firestore: {e}")
-
-def get_all_records(db) -> pd.DataFrame:
-    """Obtiene todos los registros de la base de datos."""
-    if not db:
-        return pd.DataFrame()
-    try:
-        all_records = [doc.to_dict() for doc in db.collection('evaluations').stream()]
-        return pd.DataFrame(all_records) if all_records else pd.DataFrame()
+        db_client = firestore.client()
     except Exception as e:
-        st.error(f"Error al leer de Firestore: {e}")
-        return pd.DataFrame()
+        st.error(f"Error crítico al conectar con Firebase: {e}", icon="🔥")
+        db_client = None
+
+    try:
+        api_key = st.secrets["gemini_api_key"]
+        genai.configure(api_key=api_key)
+        model_client = genai.GenerativeModel('gemini-1.5-flash-latest')
+    except Exception as e:
+        st.error(f"Error crítico al configurar el modelo de IA: {e}", icon="🤖")
+        model_client = None
+    return db_client, model_client
+
+DB, GEMINI_MODEL = init_connections()
+
+# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
+if 'logged_in' not in st.session_state:
+    st.session_state.logged_in = False
+    st.session_state.physician_email = None
+    st.session_state.page = 'login'
+    st.session_state.selected_patient_id = None
+    st.session_state.ai_analysis_running = False
+    st.session_state.last_clicked_ai = None
 
 # ==============================================================================
-# MÓDULO 2: MOTOR DE REGLAS PARA TAMIZAJE
+# MÓDULO 2: LÓGICA DE DATOS (FIRESTORE)
 # ==============================================================================
+def get_physician_patients(physician_email):
+    if not DB: return []
+    patients_ref = DB.collection('physicians').document(physician_email).collection('patients').stream()
+    return [{'id': doc.id, **doc.to_dict()} for doc in patients_ref]
 
-def evaluate_all_diseases(data: dict) -> dict:
-    """Motor de reglas que evalúa los datos y devuelve riesgos identificados."""
-    results = {}
+def save_new_patient(physician_email, patient_data):
+    if not DB: return
+    DB.collection('physicians').document(physician_email).collection('patients').document(patient_data['cedula']).set(patient_data)
+    st.success(f"Paciente {patient_data['nombre']} registrado exitosamente.")
 
-    cardio_score = sum([
-        1 if data['edad'] > 55 else 0,
-        3 if data['presion_sistolica'] >= 140 else (1 if data['presion_sistolica'] >= 130 else 0),
-        2 if data['imc'] >= 30 else 0,
-        2 if data['tabaquismo'] else 0,
-        1 if data['historia_familiar_cardio'] else 0,
-        3 if data['dolor_pecho'] else 0
-    ])
-    if cardio_score >= 5: results['Enfermedades Cardiovasculares'] = 'ALTO'
-    elif cardio_score >= 2: results['Enfermedades Cardiovasculares'] = 'MODERADO'
+def save_consultation(physician_email, patient_id, consultation_data):
+    if not DB: return None
+    timestamp = datetime.now(timezone.utc)
+    doc_id = timestamp.strftime('%Y-%m-%d_%H-%M-%S')
+    consultation_data['timestamp_utc'] = timestamp.isoformat()
+    clean_data = {k: v for k, v in consultation_data.items() if v is not None and v != ''}
+    DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(doc_id).set(clean_data)
+    st.toast("Consulta guardada.", icon="✅")
+    return doc_id
 
-    diabetes_score = sum([
-        2 if data['imc'] >= 25 else 0,
-        2 if data['historia_familiar_diabetes'] else 0,
-        1 if data['fatiga_excesiva'] else 0,
-        1 if data['sed_excesiva'] else 0
-    ])
-    if diabetes_score >= 4: results['Diabetes'] = 'ALTO'
-    elif diabetes_score >= 2: results['Diabetes'] = 'MODERADO'
+def update_consultation_with_ai_analysis(physician_email, patient_id, consultation_id, ai_report):
+    if not DB: return
+    consultation_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(consultation_id)
+    consultation_ref.update({"ai_analysis": ai_report})
+    st.toast("Análisis de IA guardado en el historial.", icon="🧠")
 
-    resp_score = sum([
-        3 if data['tabaquismo'] else 0,
-        2 if data['tos_cronica'] else 0,
-        2 if data['falta_aire'] else 0
-    ])
-    if resp_score >= 4: results['Enfermedades Respiratorias Crónicas'] = 'ALTO'
-    elif resp_score >= 2: results['Enfermedades Respiratorias Crónicas'] = 'MODERADO'
-
-    vector_score = sum([
-        3 if data['fiebre_alta'] else 0,
-        2 if data['dolor_articular_severo'] else 0,
-        1 if data['sarpullido'] else 0,
-        1 if data['vive_zona_endemica'] else 0
-    ])
-    if vector_score >= 4: results['Enfermedades por Vectores (Dengue/Chikungunya)'] = 'ALTO'
-    elif vector_score >= 2: results['Enfermedades por Vectores (Dengue/Chikungunya)'] = 'MODERADO'
-
-    return results
+def load_patient_history(physician_email, patient_id):
+    if not DB: return pd.DataFrame()
+    consultations_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').order_by('timestamp_utc', direction=firestore.Query.DESCENDING).stream()
+    records = []
+    for doc in consultations_ref:
+        record = doc.to_dict()
+        record['id'] = doc.id
+        records.append(record)
+    if not records: return pd.DataFrame()
+    df = pd.DataFrame(records)
+    df['timestamp'] = pd.to_datetime(df['timestamp_utc'])
+    return df
 
 # ==============================================================================
-# MÓDULO 3: EXPLICABILIDAD (IA SIMULADA)
+# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
 # ==============================================================================
-
-def generate_explanation(data: dict, risks: dict) -> str:
-    """Genera una explicación en lenguaje natural de los riesgos."""
-    if not risks:
-        return "#### Evaluación General\nNo se identificaron riesgos significativos. Se recomienda mantener un estilo de vida saludable."
-
-    explanation = "### Resumen de la Evaluación de Tamizaje\n\n"
-    for disease, level in risks.items():
-        explanation += f"#### ախ Riesgo de **{disease}**: `{level}`\n"
-        reasons = []
-        if disease == 'Enfermedades Cardiovasculares':
-            if data['presion_sistolica'] >= 140: reasons.append("presión arterial muy elevada")
-            if data['dolor_pecho']: reasons.append("reporte de dolor en el pecho")
-        elif disease == 'Diabetes':
-            if data['historia_familiar_diabetes']: reasons.append("historia familiar de diabetes")
-            if data['imc'] >= 25: reasons.append("sobrepeso u obesidad")
-        
-        if reasons:
-            explanation += f"**Factores contribuyentes:** {', '.join(reasons)}.\n"
+@st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
+def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
+    if not GEMINI_MODEL: return "Servicio de IA no disponible."
     
-    explanation += "\n---\n**Advertencia:** Este es un análisis preliminar y **no constituye un diagnóstico médico**. Consulte a un profesional de la salud."
-    return explanation
+    prompt = f"""
+    **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente para generar un reporte clínico estructurado, profesional y accionable.
+
+    **CONTEXTO DEL PACIENTE:**
+    - Nombre: {str(_patient_info.get('nombre', 'No especificado'))}
+    - Edad: {str(_patient_info.get('edad', 'No especificada'))} años
+    
+    **DATOS DE LA CONSULTA ACTUAL:**
+    - Motivo: {str(_latest_consultation.get('motivo_consulta', 'No especificado'))}
+    - Signos Vitales: PA {str(_latest_consultation.get('presion_sistolica', 'N/A'))}/{str(_latest_consultation.get('presion_diastolica', 'N/A'))} mmHg, Glucemia {str(_latest_consultation.get('glucemia', 'N/A'))} mg/dL, IMC {str(_latest_consultation.get('imc', 'N/A'))} kg/m².
+    - Síntomas Relevantes: Cardiovascular({str(_latest_consultation.get('sintomas_cardio', []))}), Respiratorio({str(_latest_consultation.get('sintomas_resp', []))}), Metabólico({str(_latest_consultation.get('sintomas_metabolico', []))})
+
+    **RESUMEN DEL HISTORIAL PREVIO:**
+    {_history_summary}
+
+    **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
+
+    ### Análisis Clínico Integral por IA
+
+    **1. RESUMEN DEL CASO:**
+    (Presenta un resumen conciso del paciente, su edad, y el motivo de la consulta actual en el contexto de su historial.)
+
+    **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
+    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales que deberían ser considerados y por qué.)
+
+    **3. ESTRATIFICACIÓN DEL RIESGO:**
+    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica tu respuesta basándote en los datos.)
+
+    **4. PLAN DE MANEJO SUGERIDO:**
+    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos.)
+    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida.)
+    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica.)
+    - **Metas Terapéuticas:** (Establece objetivos numéricos claros.)
+
+    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
+    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente.)
+    """
+    try:
+        response = GEMINI_MODEL.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        return f"**Error al generar recomendaciones:** {e}"
 
 # ==============================================================================
-# NÚCLEO DE LA APLICACIÓN STREAMLIT
+# MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
 # ==============================================================================
+def create_patient_report_pdf(patient_info, history_df):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    story = []
 
-# --- Inicialización ---
-IS_CONNECTED_TO_DB = check_firestore_credentials()
-DB = init_firestore() if IS_CONNECTED_TO_DB else None
+    story.append(Paragraph(str(patient_info.get('nombre', 'N/A')), styles['h1']))
+    story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
+    story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
+    story.append(Paragraph(f"Dirección: {patient_info.get('direccion', 'N/A')}", styles['Normal']))
+    story.append(Spacer(1, 0.25*inch))
 
-# --- Interfaz ---
-st.title("⚕️ Herramienta de Tamizaje de Salud Integral")
-st.caption(f"Versión {APP_VERSION} | Modo: {'CONECTADO' if IS_CONNECTED_TO_DB else 'DEMO'}")
+    for _, row in history_df.sort_values('timestamp').iterrows():
+        story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
+        motivo = str(row.get('motivo_consulta', 'N/A')).replace('\n', '<br/>')
+        story.append(Paragraph(f"<b>Motivo:</b> {motivo}", styles['Normal']))
+        pa_s = str(row.get('presion_sistolica', 'N/A'))
+        pa_d = str(row.get('presion_diastolica', 'N/A'))
+        gluc = str(row.get('glucemia', 'N/A'))
+        imc = str(row.get('imc', 'N/A'))
+        vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
+        story.append(Paragraph(vitales, styles['Normal']))
+        if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
+            story.append(Spacer(1, 0.1*inch))
+            story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
+            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('*', '- ')
+            story.append(Paragraph(analysis_text, styles['Normal']))
+        story.append(Spacer(1, 0.25*inch))
+    
+    doc.build(story)
+    buffer.seek(0)
+    return buffer.getvalue()
 
-tab1, tab2 = st.tabs(["👤 Nueva Evaluación", "📊 Dashboard Poblacional"])
+# ==============================================================================
+# MÓDULO 5: VISTAS Y COMPONENTES DE UI
+# ==============================================================================
+def render_login_page():
+    st.title("Plataforma de Gestión Clínica")
+    
+    # --- CAMBIO: Formulario de login centrado y sin columnas ---
+    with st.container(border=True):
+      with st.form("login_form"):
+          email = st.text_input("Correo Electrónico del Médico")
+          password = st.text_input("Contraseña", type="password")
+          login_button = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
+          register_button = st.form_submit_button("Registrarse", use_container_width=True)
+          
+      if login_button:
+          try:
+              user = auth.get_user_by_email(email)
+              st.session_state.logged_in = True
+              st.session_state.physician_email = user.email
+              st.session_state.page = 'control_panel'
+              st.rerun()
+          except Exception as e: st.error(f"Error de inicio de sesión: {e}")
+      if register_button:
+          try:
+              user = auth.create_user(email=email, password=password)
+              st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
+          except Exception as e: st.error(f"Error de registro: {e}")
 
-with tab1:
-    # Lógica para mostrar el formulario O los resultados
-    if 'last_evaluation' not in st.session_state:
-        st.session_state.last_evaluation = None
-
-    if st.session_state.last_evaluation:
-        st.header("Resultados del Tamizaje")
-        evaluation = st.session_state.last_evaluation
-        explanation_text = generate_explanation(evaluation['data'], evaluation['risks'])
-        st.info("Resumen de la Evaluación", icon="📄")
-        st.markdown(explanation_text)
-        
-        if st.button("Realizar una Nueva Evaluación"):
-            st.session_state.last_evaluation = None
+def render_main_app():
+    with st.sidebar:
+        st.header("Menú del Médico")
+        st.write(st.session_state.get('physician_email', 'Cargando...'))
+        st.divider()
+        if st.button("Panel de Control", use_container_width=True):
+            st.session_state.page = 'control_panel'
+            st.session_state.selected_patient_id = None
             st.rerun()
-    else:
-        with st.form("evaluation_form"):
-            st.header("Información del Paciente")
-            with st.expander("Datos Generales y Vitales", expanded=True):
-                c1, c2 = st.columns(2)
-                edad = c1.slider("Edad", 1, 100, 45)
-                sexo = c1.selectbox("Sexo Biológico", ["Masculino", "Femenino"])
-                imc = c2.slider("Índice de Masa Corporal (IMC)", 15.0, 50.0, 24.0, 0.1)
-                presion_sistolica = c2.slider("Presión Arterial Sistólica (mmHg)", 80, 220, 120)
-                vive_zona_endemica = c1.checkbox("¿Vive o ha viajado a zona de mosquitos?")
-            with st.expander("Historial Médico y Hábitos"):
-                c3, c4 = st.columns(2)
-                historia_familiar_cardio = c3.checkbox("¿Familiares con enfermedades del corazón?")
-                historia_familiar_diabetes = c3.checkbox("¿Familiares con diabetes?")
-                tabaquismo = c4.checkbox("¿Fuma actualmente?")
-            with st.expander("Síntomas Reportados"):
-                c5, c6 = st.columns(2)
-                fiebre_alta = c5.checkbox("Fiebre alta (>38.5°C)")
-                fatiga_excesiva = c5.checkbox("Cansancio o fatiga excesiva")
-                dolor_pecho = c5.checkbox("Dolor o molestia en el pecho")
-                falta_aire = c6.checkbox("Dificultad para respirar")
-                tos_cronica = c6.checkbox("Tos por más de 3 semanas")
-                sed_excesiva = c6.checkbox("Sed inusual o excesiva")
-                dolor_articular_severo = c5.checkbox("Dolor severo de articulaciones")
-                sarpullido = c6.checkbox("Sarpullido o erupciones")
-            
-            st.markdown("---")
-            consent = st.checkbox("Acepto la [política de privacidad](/PRIVACY.md) y entiendo que esto no es un diagnóstico.")
-            submitted = st.form_submit_button("Realizar Tamizaje", disabled=not consent, use_container_width=True)
-
-        if submitted:
-            patient_data = {
-                'edad': edad, 'sexo': sexo, 'imc': imc, 'presion_sistolica': presion_sistolica,
-                'vive_zona_endemica': vive_zona_endemica, 'historia_familiar_cardio': historia_familiar_cardio,
-                'historia_familiar_diabetes': historia_familiar_diabetes, 'tabaquismo': tabaquismo,
-                'fiebre_alta': fiebre_alta, 'fatiga_excesiva': fatiga_excesiva,
-                'dolor_pecho': dolor_pecho, 'falta_aire': falta_aire, 'tos_cronica': tos_cronica,
-                'sed_excesiva': sed_excesiva, 'dolor_articular_severo': dolor_articular_severo,
-                'sarpullido': sarpullido
-            }
-            
-            timestamp = datetime.utcnow().isoformat() + "Z"
-            id_source = "".join(map(str, patient_data.values())) + timestamp
-            patient_id = hashlib.sha256(id_source.encode()).hexdigest()
-            risks = evaluate_all_diseases(patient_data)
-            
-            st.session_state.last_evaluation = {"data": patient_data, "risks": risks}
-
-            if IS_CONNECTED_TO_DB:
-                record_to_save = {
-                    'patient_id': patient_id, 'timestamp': timestamp, 'app_version': APP_VERSION,
-                    **patient_data, 'identified_risks': risks
-                }
-                save_evaluation_to_firestore(DB, patient_id, timestamp, record_to_save)
-            
+        st.divider()
+        if st.button("Cerrar Sesión", use_container_width=True):
+            st.session_state.logged_in = False
             st.rerun()
-
-with tab2:
-    st.header("Dashboard de Salud Poblacional")
-    df_records = get_all_records(DB)
-
-    if df_records.empty:
-        st.info("No hay registros en la base de datos para analizar.")
-    else:
-        st.metric("Total de Evaluaciones Realizadas", len(df_records))
-        risk_counts = {}
-        if 'identified_risks' in df_records.columns:
-            for risks in df_records['identified_risks'].dropna():
-                if isinstance(risks, dict):
-                    for disease, level in risks.items():
-                        key = f"{disease} ({level})"
-                        risk_counts[key] = risk_counts.get(key, 0) + 1
         
-        if not risk_counts:
-            st.success("No se han identificado riesgos mayores en la población registrada.")
+    if st.session_state.page == 'control_panel':
+        render_control_panel()
+    elif st.session_state.page == 'patient_dashboard':
+        render_patient_dashboard()
+
+def render_control_panel():
+    st.title("Panel de Control Médico")
+
+    # --- CAMBIO: Nueva pestaña "Acerca de" ---
+    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
+
+    with tab1:
+        st.header("Registrar Nuevo Paciente")
+        with st.form("new_patient_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            nombre = c1.text_input("Nombres Completos")
+            cedula = c2.text_input("Documento de Identidad (ID único)")
+            edad = c3.number_input("Edad", min_value=0, max_value=120)
+            direccion = st.text_input("Dirección de Residencia")
+            telefono = st.text_input("Teléfono")
+            submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
+            if submitted and nombre and cedula:
+                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
+                st.rerun()
+        
+        st.divider()
+        st.header("Seleccionar Paciente Existente")
+        patients = get_physician_patients(st.session_state.physician_email)
+        if not patients:
+            st.info("No hay pacientes registrados. Agregue uno nuevo para comenzar.")
         else:
-            st.markdown("**Prevalencia de Riesgos Identificados**")
-            df_risks = pd.DataFrame(list(risk_counts.items()), columns=['Riesgo', 'Casos'])
-            df_risks = df_risks.sort_values('Casos', ascending=False)
-            
-            chart = alt.Chart(df_risks).mark_bar().encode(
-                x=alt.X('Casos:Q'),
-                y=alt.Y('Riesgo:N', sort='-x'),
-                tooltip=['Riesgo', 'Casos']
-            ).properties(title='Frecuencia de Perfiles de Riesgo')
-            st.altair_chart(chart, use_container_width=True)
+            for patient in patients:
+                col1, col2, col3 = st.columns([3, 2, 1])
+                col1.subheader(patient['nombre'])
+                col2.text(f"ID: {patient['cedula']}")
+                if col3.button("Ver Historial", key=patient['id'], use_container_width=True):
+                    st.session_state.selected_patient_id = patient['id']
+                    st.session_state.page = 'patient_dashboard'
+                    st.rerun()
 
+    # --- CAMBIO: Contenido movido a la nueva pestaña ---
+    with tab2:
+        st.markdown("### Acerca de esta Herramienta")
+        st.markdown(
+            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
+            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
+            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
+        )
+        st.divider()
+        st.markdown("##### Autor")
+        st.write("**Joseph Javier Sánchez Acuña**")
+        st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
         st.markdown("---")
-        st.markdown("#### Base de Datos de Evaluaciones")
-        st.dataframe(df_records)
-        st.download_button("Exportar a CSV", df_records.to_csv(index=False).encode('utf-8'),
-                           "registros_poblacion.csv", "text/csv")
+        st.markdown("##### Contacto")
+        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+        st.write("📧 joseph.sanchez@uniminuto.edu.co")
+
+def render_patient_dashboard():
+    patient_id = st.session_state.selected_patient_id
+    patient_info = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id).get().to_dict()
+    st.title(f"Dashboard Clínico de: {patient_info.get('nombre', 'N/A')}")
+    st.caption(f"Documento: {patient_info.get('cedula', 'N/A')} | Edad: {patient_info.get('edad', 'N/A')} años")
+    
+    df_history = load_patient_history(st.session_state.physician_email, patient_id)
+
+    if not df_history.empty:
+        pdf_data = create_patient_report_pdf(patient_info, df_history)
+        st.download_button(
+            label="📄 Descargar Reporte Completo en PDF",
+            data=pdf_data,
+            file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf",
+            mime="application/pdf",
+        )
+
+    tab1, tab2 = st.tabs(["📈 Historial de Consultas", "✍️ Registrar Nueva Consulta"])
+
+    with tab1:
+        if df_history.empty:
+            st.info("Este paciente no tiene consultas.")
+        else:
+            if st.session_state.ai_analysis_running:
+                consultation_id_to_process = st.session_state.last_clicked_ai
+                row_to_process = df_history[df_history['id'] == consultation_id_to_process].iloc[0]
+                history_summary = "..."
+                with st.spinner("Contactando al asistente de IA..."):
+                    ai_report = generate_ai_holistic_review(patient_info, row_to_process.to_dict(), history_summary)
+                    update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id_to_process, ai_report)
+                st.session_state.ai_analysis_running = False
+                st.session_state.last_clicked_ai = None
+                st.rerun()
+
+            for _, row in df_history.iterrows():
+                with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
+                    st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
+                    if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
+                        st.markdown(row['ai_analysis'])
+                    else:
+                        button_key = f"ai_{row['id']}"
+                        if st.button("Generar Análisis con IA", key=button_key, disabled=st.session_state.ai_analysis_running):
+                            st.session_state.ai_analysis_running = True
+                            st.session_state.last_clicked_ai = row['id']
+                            st.rerun()
+
+    with tab2:
+        with st.form("new_consultation_form"):
+            st.header("Datos de la Consulta")
+            with st.expander("1. Anamnesis y Vitales", expanded=True):
+                motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
+                c1, c2, c3, c4, c5 = st.columns(5)
+                presion_sistolica = c1.number_input("PA Sistólica", min_value=0)
+                presion_diastolica = c2.number_input("PA Diastólica", min_value=0)
+                frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
+                glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
+                imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
+            with st.expander("2. Revisión por Sistemas (Síntomas)"):
+                sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
+                sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
+                sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
+            with st.expander("3. Factores de Riesgo y Estilo de Vida"):
+                c1, c2 = st.columns(2)
+                dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
+                ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
+            submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
+            if submitted:
+                consultation_data = {
+                    "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
+                    "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc,
+                    "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
+                    "dieta": dieta, "ejercicio": ejercicio
+                }
+                save_consultation(st.session_state.physician_email, patient_id, consultation_data)
+                st.rerun()
+
+# ==============================================================================
+# MÓDULO 6: CONTROLADOR PRINCIPAL
+# ==============================================================================
+def main():
+    if st.session_state.get('logged_in', False):
+        render_main_app()
+    else:
+        render_login_page()
+
+if __name__ == "__main__":
+    main()
+
