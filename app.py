@@ -1,333 +1,266 @@
 # -*- coding: utf-8 -*-
 """
-Aplicación Streamlit para el Balanceo de Líneas de Producción.
-
-Versión 4.1: La información del autor se mueve a una sección "Acerca de"
-plegable al final de la página para una mejor organización.
+Aplicación de Tamizaje de Múltiples Enfermedades
+Versión: 5.0 (Estable, Unificada, Flujo Corregido)
+Descripción: Versión final que consolida toda la lógica en un solo archivo,
+corrige el flujo de envío del formulario y elimina el sidebar para una
+experiencia de usuario directa y funcional.
 """
+
+# --- LIBRERÍAS PRINCIPALES ---
 import streamlit as st
-import datetime
-import matplotlib
-matplotlib.use('Agg') # Backend para entornos sin GUI
-import matplotlib.pyplot as plt
-from io import BytesIO
-import random
+import pandas as pd
+import numpy as np
+import hashlib
+from datetime import datetime
+import firebase_admin
+from firebase_admin import credentials, firestore
+import altair as alt
 
-# --- Importaciones para PDF y Twilio ---
-try:
-    from reportlab.lib.pagesizes import letter
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image, Table, TableStyle
-    from reportlab.lib.styles import getSampleStyleSheet
-    from reportlab.lib.units import inch
-    from reportlab.lib import colors
-    IS_PDF_AVAILABLE = True
-except ImportError:
-    IS_PDF_AVAILABLE = False
+# --- CONFIGURACIÓN DE LA PÁGINA ---
+st.set_page_config(
+    page_title="Tamizaje de Salud Integral",
+    page_icon="⚕️",
+    layout="wide"
+)
 
-try:
-    from twilio.rest import Client
-    from twilio.base.exceptions import TwilioRestException
-    IS_TWILIO_AVAILABLE = True
-except ImportError:
-    IS_TWILIO_AVAILABLE = False
-    Client, TwilioRestException = None, None
+# --- CONSTANTES ---
+APP_VERSION = "5.0.0"
 
-# --- Lógica de Negocio (Clases sin cambios) ---
-class Estacion:
-    """Representa una estación de trabajo."""
-    def __init__(self, nombre, tiempo, predecesora_nombre=""):
-        if not isinstance(tiempo, (int, float)) or tiempo <= 0:
-            raise ValueError(f"El tiempo para la estación '{nombre}' debe ser un número positivo.")
-        self.nombre = nombre
-        self.tiempo = float(tiempo)
-        self.predecesora_nombre = predecesora_nombre
-        self.es, self.ef, self.ls, self.lf, self.holgura = 0.0, 0.0, 0.0, 0.0, 0.0
-        self.es_critica = False
+# ==============================================================================
+# MÓDULO 1: LÓGICA DE FIREBASE
+# ==============================================================================
 
-class LineaProduccion:
-    """Gestiona los cálculos de la línea de producción con métricas avanzadas."""
-    def __init__(self, estaciones_data, unidades, empleados):
-        self.estaciones_dict = {}
-        self.estaciones_lista = []
-        self._procesar_estaciones_data(estaciones_data)
-        self.unidades_a_producir = unidades
-        self.num_empleados_disponibles = empleados
-        self.tiempo_total_camino_critico = 0.0
-        self.camino_critico_nombres = []
-        self.tiempo_ciclo_calculado = 0.0
-        self.tiempo_produccion_total_estimado = 0.0
-        self.eficiencia_linea = 0.0
-        self.cuello_botella_info = {}
-        self.empleados_asignados_por_estacion = []
-        self.tasa_produccion = 0.0
-        self.tiempo_inactivo_total = 0.0
+def check_firestore_credentials() -> bool:
+    """Verifica si las credenciales de Firebase están en los Secrets."""
+    return "firebase_credentials" in st.secrets
 
-    def _procesar_estaciones_data(self, estaciones_data):
-        nombres_vistos = set()
-        for data in estaciones_data:
-            nombre = data.get("nombre")
-            if not nombre: raise ValueError("Todas las estaciones deben tener un nombre.")
-            if nombre.lower() in nombres_vistos: raise ValueError(f"Nombre de estación duplicado: '{nombre}'.")
-            nombres_vistos.add(nombre.lower())
-            est = Estacion(nombre, data.get("tiempo"), data.get("predecesora", ""))
-            self.estaciones_lista.append(est)
-            self.estaciones_dict[nombre] = est
-        for est in self.estaciones_lista:
-            if est.predecesora_nombre and est.predecesora_nombre not in self.estaciones_dict:
-                raise ValueError(f"La predecesora '{est.predecesora_nombre}' para '{est.nombre}' no existe.")
-
-    def calcular_cpm(self):
-        for est in self.estaciones_lista:
-            pred = self.estaciones_dict.get(est.predecesora_nombre)
-            est.es = pred.ef if pred else 0
-            est.ef = est.es + est.tiempo
-        self.tiempo_total_camino_critico = max((est.ef for est in self.estaciones_lista), default=0.0)
-        for est in reversed(self.estaciones_lista):
-            sucesores = [s for s in self.estaciones_lista if s.predecesora_nombre == est.nombre]
-            est.lf = min((s.ls for s in sucesores), default=self.tiempo_total_camino_critico)
-            est.ls = est.lf - est.tiempo
-            est.holgura = est.ls - est.es
-            if abs(est.holgura) < 1e-6:
-                est.es_critica = True
-        self.camino_critico_nombres = sorted([est.nombre for est in self.estaciones_lista if est.es_critica])
-        if self.estaciones_lista:
-            cuello_botella = max(self.estaciones_lista, key=lambda e: e.tiempo)
-            self.cuello_botella_info = {"nombre": cuello_botella.nombre, "tiempo_proceso_individual": cuello_botella.tiempo}
-
-    def calcular_metricas_avanzadas(self):
-        tiempo_cuello_botella = self.cuello_botella_info.get("tiempo_proceso_individual", 0)
-        self.tiempo_ciclo_calculado = tiempo_cuello_botella
-        if self.unidades_a_producir > 0 and tiempo_cuello_botella > 0:
-            self.tiempo_produccion_total_estimado = self.tiempo_total_camino_critico + (self.unidades_a_producir - 1) * tiempo_cuello_botella
-            self.tasa_produccion = 60 / tiempo_cuello_botella # Unidades por hora
-        else:
-            self.tiempo_produccion_total_estimado = self.tiempo_total_camino_critico
-            self.tasa_produccion = 0.0
-        
-        sum_tiempos = sum(est.tiempo for est in self.estaciones_lista)
-        denominador = len(self.estaciones_lista) * tiempo_cuello_botella
-        self.eficiencia_linea = (sum_tiempos / denominador) * 100 if denominador > 0 else 0.0
-        self.tiempo_inactivo_total = sum(est.holgura for est in self.estaciones_lista if not est.es_critica)
-
-    def asignar_empleados(self):
-        total_tiempo = sum(est.tiempo for est in self.estaciones_lista)
-        if total_tiempo == 0 or self.num_empleados_disponibles == 0:
-            self.empleados_asignados_por_estacion = [{"nombre": e.nombre, "empleados": 0} for e in self.estaciones_lista]
-            return
-        asignaciones = [{'nombre': e.nombre, 'ideal': e.tiempo / total_tiempo * self.num_empleados_disponibles} for e in self.estaciones_lista]
-        for a in asignaciones: a['base'], a['fraccion'] = int(a['ideal']), a['ideal'] - int(a['ideal'])
-        restantes = self.num_empleados_disponibles - sum(a['base'] for a in asignaciones)
-        asignaciones.sort(key=lambda x: x['fraccion'], reverse=True)
-        for i in range(min(restantes, len(asignaciones))): asignaciones[i]['base'] += 1
-        mapa = {a['nombre']: a['base'] for a in asignaciones}
-        self.empleados_asignados_por_estacion = [{"nombre": e.nombre, "empleados": mapa.get(e.nombre, 0)} for e in self.estaciones_lista]
-    
-    def ejecutar_calculos(self):
-        self.calcular_cpm()
-        self.calcular_metricas_avanzadas()
-        self.asignar_empleados()
-
-# --- Lógica de Twilio Reintegrada ---
-LOW_EFFICIENCY_THRESHOLD = 85
-
-def inicializar_twilio_client():
-    if not IS_TWILIO_AVAILABLE: return None
+@st.cache_resource
+def init_firestore():
+    """Inicializa la conexión con Firestore."""
     try:
-        if hasattr(st, 'secrets') and all(k in st.secrets for k in ["TWILIO_ACCOUNT_SID", "TWILIO_AUTH_TOKEN"]):
-            account_sid = st.secrets["TWILIO_ACCOUNT_SID"]
-            auth_token = st.secrets["TWILIO_AUTH_TOKEN"]
-            if account_sid.startswith("AC") and len(auth_token) > 30:
-                st.session_state.twilio_configured = True
-                return Client(account_sid, auth_token)
+        creds_dict = st.secrets["firebase_credentials"]
+        creds = credentials.Certificate(creds_dict)
+        try:
+            firebase_admin.initialize_app(creds)
+        except ValueError:
+            pass # App ya inicializada
+        return firestore.client()
     except Exception:
-        pass # Silently fail if secrets are not valid
-    st.session_state.twilio_configured = False
-    return None
+        return None
 
-def enviar_alerta_whatsapp(mensaje):
-    if 'twilio_client' not in st.session_state or not st.session_state.twilio_client:
-        return
+def save_evaluation_to_firestore(db, patient_id: str, timestamp: str, data: dict):
+    """Guarda una evaluación en Firestore."""
+    if db:
+        try:
+            doc_id = f"{patient_id}_{timestamp}"
+            record_ref = db.collection('evaluations').document(doc_id)
+            record_ref.set(data)
+            st.toast("Evaluación guardada en la base de datos.")
+        except Exception as e:
+            st.error(f"Error al guardar en Firestore: {e}")
 
-    if not st.session_state.get('twilio_configured'):
-        st.warning("Las credenciales de Twilio no están configuradas en los Secrets. No se pueden enviar alertas.", icon="⚠️")
-        return
+def get_all_records(db) -> pd.DataFrame:
+    """Obtiene todos los registros de la base de datos."""
+    if not db:
+        return pd.DataFrame()
+    try:
+        all_records = [doc.to_dict() for doc in db.collection('evaluations').stream()]
+        return pd.DataFrame(all_records) if all_records else pd.DataFrame()
+    except Exception as e:
+        st.error(f"Error al leer de Firestore: {e}")
+        return pd.DataFrame()
+
+# ==============================================================================
+# MÓDULO 2: MOTOR DE REGLAS PARA TAMIZAJE
+# ==============================================================================
+
+def evaluate_all_diseases(data: dict) -> dict:
+    """Motor de reglas que evalúa los datos y devuelve riesgos identificados."""
+    results = {}
+
+    # Lógica de evaluación para cada enfermedad
+    cardio_score = sum([
+        1 if data['edad'] > 55 else 0,
+        3 if data['presion_sistolica'] >= 140 else (1 if data['presion_sistolica'] >= 130 else 0),
+        2 if data['imc'] >= 30 else 0,
+        2 if data['tabaquismo'] else 0,
+        1 if data['historia_familiar_cardio'] else 0,
+        3 if data['dolor_pecho'] else 0
+    ])
+    if cardio_score >= 5: results['Enfermedades Cardiovasculares'] = 'ALTO'
+    elif cardio_score >= 2: results['Enfermedades Cardiovasculares'] = 'MODERADO'
+
+    diabetes_score = sum([
+        2 if data['imc'] >= 25 else 0,
+        2 if data['historia_familiar_diabetes'] else 0,
+        1 if data['fatiga_excesiva'] else 0,
+        1 if data['sed_excesiva'] else 0
+    ])
+    if diabetes_score >= 4: results['Diabetes'] = 'ALTO'
+    elif diabetes_score >= 2: results['Diabetes'] = 'MODERADO'
+
+    resp_score = sum([
+        3 if data['tabaquismo'] else 0,
+        2 if data['tos_cronica'] else 0,
+        2 if data['falta_aire'] else 0
+    ])
+    if resp_score >= 4: results['Enfermedades Respiratorias Crónicas'] = 'ALTO'
+    elif resp_score >= 2: results['Enfermedades Respiratorias Crónicas'] = 'MODERADO'
+
+    vector_score = sum([
+        3 if data['fiebre_alta'] else 0,
+        2 if data['dolor_articular_severo'] else 0,
+        1 if data['sarpullido'] else 0,
+        1 if data['vive_zona_endemica'] else 0
+    ])
+    if vector_score >= 4: results['Enfermedades por Vectores (Dengue/Chikungunya)'] = 'ALTO'
+    elif vector_score >= 2: results['Enfermedades por Vectores (Dengue/Chikungunya)'] = 'MODERADO'
+
+    return results
+
+# ==============================================================================
+# MÓDULO 3: EXPLICABILIDAD (IA SIMULADA)
+# ==============================================================================
+
+def generate_explanation(data: dict, risks: dict) -> str:
+    """Genera una explicación en lenguaje natural de los riesgos."""
+    if not risks:
+        return "#### Evaluación General\nNo se identificaron riesgos significativos. Se recomienda mantener un estilo de vida saludable."
+
+    explanation = "### Resumen de la Evaluación de Tamizaje\n\n"
+    for disease, level in risks.items():
+        explanation += f"#### ախ Riesgo de **{disease}**: `{level}`\n"
+        reasons = []
+        if disease == 'Enfermedades Cardiovasculares':
+            if data['presion_sistolica'] >= 140: reasons.append("presión arterial muy elevada")
+            if data['dolor_pecho']: reasons.append("reporte de dolor en el pecho")
+        elif disease == 'Diabetes':
+            if data['historia_familiar_diabetes']: reasons.append("historia familiar de diabetes")
+            if data['imc'] >= 25: reasons.append("sobrepeso u obesidad")
         
-    try:
-        from_number = st.secrets["TWILIO_WHATSAPP_FROM_NUMBER"]
-        to_number = st.secrets["DESTINATION_WHATSAPP_NUMBER"]
-        codigo_aleatorio = random.randint(100000, 999999)
-        mensaje_final = f"Your Twilio code is {codigo_aleatorio}\n\n{mensaje}"
-
-        st.session_state.twilio_client.messages.create(
-            from_=f'whatsapp:{from_number}',
-            body=mensaje_final,
-            to=f'whatsapp:{to_number}'
-        )
-        st.toast(f"¡Alerta de baja eficiencia enviada a {to_number}!", icon="✅")
+        if reasons:
+            explanation += f"**Factores contribuyentes:** {', '.join(reasons)}.\n"
     
-    except TwilioRestException as e:
-        st.error(f"Error de Twilio: {e.msg}", icon="🚨")
-        if e.code == 21608:
-            st.warning("Error 21608: El número de destino no está verificado. Reactiva tu Sandbox de WhatsApp.", icon="📱")
-    except Exception as e:
-        st.error(f"Error inesperado al enviar WhatsApp: {e}", icon="🚨")
+    explanation += "\n---\n**Advertencia:** Este es un análisis preliminar y **no constituye un diagnóstico médico**. Consulte a un profesional de la salud."
+    return explanation
 
-# --- Funciones de Generación (Gráficos, PDF) ---
-def generar_graficos(linea_obj):
-    fig_pie, ax1 = plt.subplots(figsize=(5, 4))
-    ax1.pie([e.tiempo for e in linea_obj.estaciones_lista], labels=[e.nombre for e in linea_obj.estaciones_lista], autopct='%1.1f%%', startangle=90)
-    ax1.axis('equal'); ax1.set_title('Distribución de Tiempos')
-    plt.tight_layout()
-    fig_bar, ax2 = plt.subplots(figsize=(5, 4))
-    ax2.bar([a['nombre'] for a in linea_obj.empleados_asignados_por_estacion], [a['empleados'] for a in linea_obj.empleados_asignados_por_estacion], color='skyblue')
-    ax2.set_title('Asignación de Empleados'); plt.xticks(rotation=45, ha="right"); plt.tight_layout()
-    return fig_pie, fig_bar
+# ==============================================================================
+# NÚCLEO DE LA APLICACIÓN STREAMLIT
+# ==============================================================================
 
-def generar_reporte_pdf(linea_obj):
-    if not IS_PDF_AVAILABLE: return None
-    buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=inch*0.5, bottomMargin=inch*0.5)
-    styles = getSampleStyleSheet()
-    story = []
-    story.append(Paragraph("Reporte de Optimización de Línea", styles['h1']))
-    story.append(Spacer(1, 0.2*inch))
-    kpi_data = [
-        ["Eficiencia de Línea:", f"{linea_obj.eficiencia_linea:.2f}%"], ["Tiempo de Ciclo:", f"{linea_obj.tiempo_ciclo_calculado:.2f} min/ud"],
-        ["Tasa de Producción:", f"{linea_obj.tasa_produccion:.2f} uds/hora"], ["Tiempo Inactivo Total:", f"{linea_obj.tiempo_inactivo_total:.2f} min"]
-    ]
-    story.append(Table(kpi_data, style=[('ALIGN', (0,0), (-1,-1), 'LEFT'), ('FONTNAME', (0,0), (0,-1), 'Helvetica-Bold')]))
-    story.append(Spacer(1, 0.2*inch))
-    story.append(Paragraph("Detalle de la Ruta Crítica (CPM)", styles['h2']))
-    cpm_header = ["Estación", "Tiempo", "ES", "EF", "LS", "LF", "Holgura", "Crítica"]
-    cpm_data = [cpm_header] + [[est.nombre, f"{est.tiempo:.2f}", f"{est.es:.2f}", f"{est.ef:.2f}", f"{est.ls:.2f}", f"{est.lf:.2f}", f"{est.holgura:.2f}", "Sí" if est.es_critica else "No"] for est in linea_obj.estaciones_lista]
-    story.append(Table(cpm_data, style=[('BACKGROUND', (0,0), (-1,0), colors.grey), ('GRID', (0,0), (-1,-1), 1, colors.black)]))
-    fig_pie, fig_bar = generar_graficos(linea_obj)
-    charts = []
-    for fig in [fig_pie, fig_bar]:
-        if fig:
-            buf = BytesIO(); fig.savefig(buf, format='PNG', dpi=300); buf.seek(0)
-            charts.append(Image(buf, width=3.5*inch, height=2.8*inch))
-    if charts: story.append(Table([charts]))
-    doc.build(story); buffer.seek(0)
-    return buffer.getvalue()
+# --- Inicialización ---
+IS_CONNECTED_TO_DB = check_firestore_credentials()
+DB = init_firestore() if IS_CONNECTED_TO_DB else None
 
-# --- Configuración Inicial y Estado ---
-st.set_page_config(page_title="Optimizador de Líneas", layout="wide", page_icon="🏭")
+# --- Interfaz ---
+st.title("⚕️ Herramienta de Tamizaje de Salud Integral")
+st.caption(f"Versión {APP_VERSION} | Modo: {'CONECTADO' if IS_CONNECTED_TO_DB else 'DEMO'}")
 
-if 'estaciones' not in st.session_state:
-    st.session_state.estaciones = [
-        {'nombre': 'Corte', 'tiempo': 2.0, 'predecesora': ''}, {'nombre': 'Doblado', 'tiempo': 3.0, 'predecesora': 'Corte'},
-        {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
-        {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
-    ]
-if 'twilio_client' not in st.session_state:
-    st.session_state.twilio_client = inicializar_twilio_client()
+tab1, tab2 = st.tabs(["👤 Nueva Evaluación", "📊 Dashboard Poblacional"])
 
-# --- Interfaz de Usuario Principal ---
-st.title("🏭 Optimizador Avanzado de Líneas de Producción")
-st.markdown("Configure los parámetros, defina las estaciones y presione **Calcular** para obtener un análisis completo.")
+with tab1:
+    if 'show_results' in st.session_state and st.session_state.show_results:
+        st.header("Resultados del Tamizaje")
+        evaluation = st.session_state.get('last_evaluation', {})
+        if evaluation:
+            explanation_text = generate_explanation(evaluation['data'], evaluation['risks'])
+            st.info("Resumen de la Evaluación", icon="📄")
+            st.markdown(explanation_text)
+        
+        if st.button("Realizar una Nueva Evaluación"):
+            st.session_state.show_results = False
+            st.rerun()
+    else:
+        with st.form("evaluation_form"):
+            st.header("Información del Paciente")
+            with st.expander("Datos Generales y Vitales", expanded=True):
+                c1, c2 = st.columns(2)
+                edad = c1.slider("Edad", 1, 100, 45)
+                sexo = c1.selectbox("Sexo Biológico", ["Masculino", "Femenino"])
+                imc = c2.slider("Índice de Masa Corporal (IMC)", 15.0, 50.0, 24.0, 0.1)
+                presion_sistolica = c2.slider("Presión Arterial Sistólica (mmHg)", 80, 220, 120)
+                vive_zona_endemica = c1.checkbox("¿Vive o ha viajado a zona de mosquitos?")
+            with st.expander("Historial Médico y Hábitos"):
+                c3, c4 = st.columns(2)
+                historia_familiar_cardio = c3.checkbox("¿Familiares con enfermedades del corazón?")
+                historia_familiar_diabetes = c3.checkbox("¿Familiares con diabetes?")
+                tabaquismo = c4.checkbox("¿Fuma actualmente?")
+            with st.expander("Síntomas Reportados"):
+                c5, c6 = st.columns(2)
+                fiebre_alta = c5.checkbox("Fiebre alta (>38.5°C)")
+                fatiga_excesiva = c5.checkbox("Cansancio o fatiga excesiva")
+                dolor_pecho = c5.checkbox("Dolor o molestia en el pecho")
+                falta_aire = c6.checkbox("Dificultad para respirar")
+                tos_cronica = c6.checkbox("Tos por más de 3 semanas")
+                sed_excesiva = c6.checkbox("Sed inusual o excesiva")
+                dolor_articular_severo = c5.checkbox("Dolor severo de articulaciones")
+                sarpullido = c6.checkbox("Sarpullido o erupciones")
+            
+            st.markdown("---")
+            consent = st.checkbox("Acepto la [política de privacidad](/PRIVACY.md) y entiendo que esto no es un diagnóstico.")
+            submitted = st.form_submit_button("Realizar Tamizaje", disabled=not consent, use_container_width=True)
 
-# --- Panel de Control Superior ---
-with st.container(border=True):
-    col1, col2, col3 = st.columns([1, 1, 2])
-    with col1:
-        unidades = st.number_input("Unidades a Producir", 1, value=100, step=10, help="Total de productos a fabricar.")
-    with col2:
-        empleados = st.number_input("Empleados Disponibles", 1, value=5, step=1, help="Número total de operarios en la línea.")
-    
-    with col3:
-        st.write(" &nbsp; ") 
-        action_cols = st.columns(3)
-        calculate_pressed = action_cols[0].button("🚀 Calcular", type="primary", use_container_width=True)
-        download_placeholder = action_cols[1].empty()
-        if action_cols[2].button("🔄 Resetear", use_container_width=True):
-            st.session_state.results = None
-            st.session_state.estaciones = [
-                {'nombre': 'Corte', 'tiempo': 2.0, 'predecesora': ''}, {'nombre': 'Doblado', 'tiempo': 3.0, 'predecesora': 'Corte'},
-                {'nombre': 'Ensamblaje', 'tiempo': 5.0, 'predecesora': 'Doblado'}, {'nombre': 'Pintura', 'tiempo': 4.0, 'predecesora': 'Ensamblaje'},
-                {'nombre': 'Empaque', 'tiempo': 1.5, 'predecesora': 'Pintura'}
-            ]
+        if submitted:
+            patient_data = {
+                'edad': edad, 'sexo': sexo, 'imc': imc, 'presion_sistolica': presion_sistolica,
+                'vive_zona_endemica': vive_zona_endemica, 'historia_familiar_cardio': historia_familiar_cardio,
+                'historia_familiar_diabetes': historia_familiar_diabetes, 'tabaquismo': tabaquismo,
+                'fiebre_alta': fiebre_alta, 'fatiga_excesiva': fatiga_excesiva,
+                'dolor_pecho': dolor_pecho, 'falta_aire': falta_aire, 'tos_cronica': tos_cronica,
+                'sed_excesiva': sed_excesiva, 'dolor_articular_severo': dolor_articular_severo,
+                'sarpullido': sarpullido
+            }
+            
+            timestamp = datetime.utcnow().isoformat() + "Z"
+            id_source = "".join(map(str, patient_data.values())) + timestamp
+            patient_id = hashlib.sha256(id_source.encode()).hexdigest()
+            risks = evaluate_all_diseases(patient_data)
+            
+            st.session_state['last_evaluation'] = {"data": patient_data, "risks": risks}
+            st.session_state.show_results = True
+
+            if IS_CONNECTED_TO_DB:
+                record_to_save = {
+                    'patient_id': patient_id, 'timestamp': timestamp, 'app_version': APP_VERSION,
+                    **patient_data, 'identified_risks': risks
+                }
+                save_evaluation_to_firestore(DB, patient_id, timestamp, record_to_save)
+            
             st.rerun()
 
-# --- Definición de Estaciones (Plegable) ---
-with st.expander("⚙️ **Haga clic aquí para definir las estaciones**", expanded=True):
-    gestion_cols = st.columns([4, 1, 1])
-    with gestion_cols[1]:
-        if st.button("➕ Añadir", use_container_width=True):
-            st.session_state.estaciones.append({'nombre': '', 'tiempo': 1.0, 'predecesora': ''})
-            st.rerun()
-    with gestion_cols[2]:
-        if st.button("➖ Quitar", use_container_width=True, disabled=len(st.session_state.estaciones) <= 1):
-            st.session_state.estaciones.pop()
-            st.rerun()
+with tab2:
+    st.header("Dashboard de Salud Poblacional")
+    df_records = get_all_records(DB)
 
-    estaciones_cols = st.columns(max(1, len(st.session_state.estaciones)))
-    for i, est in enumerate(st.session_state.estaciones):
-        with estaciones_cols[i % len(estaciones_cols)]:
-            st.markdown(f"**Estación {i+1}**")
-            st.session_state.estaciones[i]['nombre'] = st.text_input("Nombre", est['nombre'], key=f"nombre_{i}")
-            st.session_state.estaciones[i]['tiempo'] = st.number_input("Tiempo (min)", 0.01, value=est['tiempo'], key=f"tiempo_{i}")
-            opts = [""] + [e['nombre'] for j, e in enumerate(st.session_state.estaciones) if i != j and e['nombre']]
-            st.session_state.estaciones[i]['predecesora'] = st.selectbox("Predecesora", opts, index=(opts.index(est['predecesora']) if est['predecesora'] in opts else 0), key=f"pred_{i}")
+    if df_records.empty:
+        st.info("No hay registros en la base de datos para analizar.")
+    else:
+        st.metric("Total de Evaluaciones Realizadas", len(df_records))
+        risk_counts = {}
+        if 'identified_risks' in df_records.columns:
+            for risks in df_records['identified_risks'].dropna():
+                if isinstance(risks, dict):
+                    for disease, level in risks.items():
+                        key = f"{disease} ({level})"
+                        risk_counts[key] = risk_counts.get(key, 0) + 1
+        
+        if not risk_counts:
+            st.success("No se han identificado riesgos mayores en la población registrada.")
+        else:
+            st.markdown("**Prevalencia de Riesgos Identificados**")
+            df_risks = pd.DataFrame(list(risk_counts.items()), columns=['Riesgo', 'Casos'])
+            df_risks = df_risks.sort_values('Casos', ascending=False)
+            
+            chart = alt.Chart(df_risks).mark_bar().encode(
+                x=alt.X('Casos:Q'),
+                y=alt.Y('Riesgo:N', sort='-x'),
+                tooltip=['Riesgo', 'Casos']
+            ).properties(title='Frecuencia de Perfiles de Riesgo')
+            st.altair_chart(chart, use_container_width=True)
 
-# --- Lógica de Cálculo ---
-if calculate_pressed:
-    try:
-        linea = LineaProduccion(st.session_state.estaciones, unidades, empleados)
-        linea.ejecutar_calculos()
-        st.session_state.results = {"linea_obj": linea}
-        st.success("¡Análisis completado!")
-        if linea.eficiencia_linea < LOW_EFFICIENCY_THRESHOLD:
-            mensaje = f"¡Alerta de Producción! 📉\nEficiencia: *{linea.eficiencia_linea:.1f}%*.\nCuello de botella: '{linea.cuello_botella_info.get('nombre', 'N/A')}'."
-            enviar_alerta_whatsapp(mensaje)
-    except Exception as e:
-        st.error(f"Error en el cálculo: {e}")
-        st.session_state.results = None
-
-# --- Panel de Resultados ---
-if 'results' in st.session_state and st.session_state.results:
-    linea_res = st.session_state.results['linea_obj']
-    
-    # Rellenar el botón de descarga en el panel de control superior
-    with download_placeholder:
-        st.download_button("📄 PDF", generar_reporte_pdf(linea_res), "reporte.pdf", "application/pdf", use_container_width=True)
-
-    with st.container(border=True):
-        st.header("📊 Resultados de la Optimización")
-        kpi_cols = st.columns(5)
-        kpi_cols[0].metric("Eficiencia", f"{linea_res.eficiencia_linea:.1f}%", f"{linea_res.eficiencia_linea-100:.1f}%")
-        kpi_cols[1].metric("Tiempo de Ciclo", f"{linea_res.tiempo_ciclo_calculado:.2f} min/ud")
-        kpi_cols[2].metric("Tasa de Producción", f"{linea_res.tasa_produccion:.1f} uds/hr")
-        kpi_cols[3].metric("Tiempo Total", f"{linea_res.tiempo_produccion_total_estimado:.1f} min")
-        kpi_cols[4].metric("Tiempo Inactivo", f"{linea_res.tiempo_inactivo_total:.1f} min")
-
-        tab1, tab2, tab3 = st.tabs(["📈 **Análisis y Sugerencias**", "📋 **Tabla CPM**", "🧑‍💼 **Asignación de Personal**"])
-        with tab1:
-            cb_nombre = linea_res.cuello_botella_info.get('nombre', 'N/A')
-            st.info(f"**Cuello de Botella:** Estación **'{cb_nombre}'** ({linea_res.tiempo_ciclo_calculado:.2f} min).", icon="⚠️")
-            candidatas = sorted([est for est in linea_res.estaciones_lista if not est.es_critica], key=lambda x: x.holgura, reverse=True)
-            if linea_res.eficiencia_linea < 85 and candidatas:
-                st.warning(f"**Sugerencia:** Mover tareas desde '{cb_nombre}' hacia **'{candidatas[0].nombre}'** (holgura de {candidatas[0].holgura:.2f} min) para mejorar el balance.", icon="🛠️")
-        with tab2:
-            st.dataframe([{"Estación": est.nombre, "Tiempo": est.tiempo, "ES": est.es, "EF": est.ef, "LS": est.ls, "LF": est.lf, "Holgura": f"{est.holgura:.2f}", "Crítica": "🔴 Sí" if est.es_critica else "🟢 No"} for est in linea_res.estaciones_lista])
-        with tab3:
-            st.dataframe(linea_res.empleados_asignados_por_estacion)
-
-# --- Sección "Acerca de" ---
-st.write("") # Espacio vertical
-with st.expander("ℹ️ Acerca del Autor y la Aplicación"):
-    col1, col2 = st.columns([1, 2])
-    with col1:
-        st.markdown("##### **Autor**")
-        st.write("**Joseph Javier Sánchez Acuña**")
-        st.write("_Ing. Industrial, Experto en IA y Software._")
-    with col2:
-        st.markdown("##### **Contacto**")
-        st.write(
-            "🔗 [LinkedIn](https.linkedin.com/in/joseph-javier-sánchez-acuña-150410275) &nbsp;&nbsp;"
-            "📂 [GitHub](https://github.com/GIUSEPPESAN21) &nbsp;&nbsp;"
-            "📧 joseph.sanchez@uniminuto.edu.co"
-        )
-    st.markdown("---")
-    st.write("Esta aplicación fue desarrollada como una herramienta avanzada para el análisis y balanceo de líneas de producción, utilizando Python y Streamlit, con capacidades de notificación en tiempo real a través de Twilio.")
-
+        st.markdown("---")
+        st.markdown("#### Base de Datos de Evaluaciones")
+        st.dataframe(df_records)
+        st.download_button("Exportar a CSV", df_records.to_csv(index=False).encode('utf-8'),
+                           "registros_poblacion.csv", "text/csv")
