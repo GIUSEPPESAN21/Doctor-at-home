@@ -1,18 +1,12 @@
-# Core Framework
+# Core application & ML
 streamlit
-
-# Data Handling & Numerics
 pandas
 numpy
+scikit-learn
+joblib
 
-# Database Connector
+# Firebase Integration
 firebase-admin
 
-# Google AI SDK
-google-generativeai
-
-# Advanced Visualization
+# Advanced Charting
 altair
-
-# PDF Generation Library (NUEVA Y MEJORADA)
-reportlab
