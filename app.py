@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 1.0 ("Hybrid Diagnostic Platform")
-Descripción: Esta versión representa un salto a un nivel de doctorado,
-integrando un sistema de diagnóstico dual. Combina un modelo de machine learning
-clásico (Regresión Logística con Scikit-learn) para una predicción de riesgo
-cuantitativa, con el análisis cualitativo del modelo de lenguaje más potente
-(Gemini 1.5 Pro).
+Versión: 23.0 ("Hybrid Control Panel Suite")
+Descripción: Esta versión fusiona la avanzada interfaz de usuario del panel de
+control con el potente sistema de diagnóstico híbrido. Mantiene
+el flujo de trabajo centrado en el médico y la interfaz de pestañas,
+mientras integra el modelo de machine learning (Scikit-learn) y la IA
+avanzada (Gemini 1.5 Pro) para un análisis clínico completo.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -21,17 +21,16 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 import numpy as np
 from sklearn.linear_model import LogisticRegression
-import joblib # Se usará para simular la carga de un modelo pre-entrenado
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Plataforma de Diagnóstico Híbrida",
+    page_title="Suite Híbrida de Diagnóstico",
     page_icon="🧬",
     layout="wide"
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "22.0.0 (Hybrid Diagnostic Platform)"
+APP_VERSION = "23.0.0 (Hybrid Control Panel Suite)"
 
 # ==============================================================================
 # MÓDULO 1: MODELO DE MACHINE LEARNING
@@ -40,12 +39,8 @@ APP_VERSION = "22.0.0 (Hybrid Diagnostic Platform)"
 def load_prediction_model():
     """
     Simula la carga de un modelo de Regresión Logística pre-entrenado.
-    En una aplicación real, este modelo se entrenaría con miles de datos de pacientes.
-    Aquí, creamos y "entrenamos" un modelo simple para demostrar la funcionalidad.
-    Características del modelo simulado: ['edad', 'imc', 'presion_sistolica', 'es_fumador']
     """
     model = LogisticRegression()
-    # Coeficientes simulados que dan importancia a la edad y la presión arterial
     model.coef_ = np.array([[0.08, 0.05, 0.03, 0.6]])
     model.intercept_ = np.array([-6.5])
     model.classes_ = np.array([0, 1])
@@ -56,7 +51,6 @@ RISK_MODEL = load_prediction_model()
 def predict_cardiovascular_risk(model, patient_info, latest_consultation):
     """
     Usa el modelo de ML para predecir el riesgo cardiovascular.
-    Devuelve una probabilidad (índice de riesgo) de 0 a 100.
     """
     try:
         edad = patient_info.get('edad', 50)
@@ -93,7 +87,6 @@ def init_connections():
     try:
         api_key = st.secrets["gemini_api_key"]
         genai.configure(api_key=api_key)
-        # --- CAMBIO: Usando el modelo Pro ---
         model_client = genai.GenerativeModel('gemini-1.5-pro-latest')
     except Exception as e:
         st.error(f"Error crítico al configurar el modelo de IA: {e}", icon="🤖")
@@ -175,10 +168,10 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _risk_index
     ### Análisis Clínico Integrado por IA (Gemini 1.5 Pro)
 
     **1. INTERPRETACIÓN CONJUNTA:**
-    (Integra el resultado del modelo predictivo con los datos clínicos. Por ejemplo: "El modelo de machine learning clasifica al paciente con un índice de riesgo de {_risk_index}, lo cual es consistente con los hallazgos clínicos de [mencionar hallazgos como HTA, edad, etc.]...")
+    (Integra el resultado del modelo predictivo con los datos clínicos.)
 
     **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
-    (Basado en toda la información, ¿cuál es el diagnóstico más probable? ¿Qué otras posibilidades deberían ser consideradas?)
+    (Basado en toda la información, ¿cuál es el diagnóstico más probable?)
 
     **3. PLAN DE MANEJO SUGERIDO:**
     - **Estudios Diagnósticos:** (Lista de exámenes necesarios.)
@@ -213,7 +206,7 @@ def create_patient_report_pdf(patient_info, history_df):
         vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
         story.append(Paragraph(vitales, styles['Normal']))
         if 'risk_index' in row:
-             story.append(Paragraph(f"<b>Índice de Riesgo CV (ML):</b> {row['risk_index']}/100", styles['Normal']))
+             story.append(Paragraph(f"<b>Índice de Riesgo CV (ML):</b> {int(row['risk_index'])}/100", styles['Normal']))
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1*inch))
             story.append(Paragraph("<b>--- Análisis por IA (Gemini Pro) ---</b>", styles['h3']))
@@ -281,7 +274,6 @@ def render_control_panel():
             edad = c3.number_input("Edad", min_value=0, max_value=120)
             direccion = st.text_input("Dirección de Residencia")
             telefono = st.text_input("Teléfono")
-            # Nuevo campo para el modelo de ML
             tabaquismo = st.selectbox("¿El paciente fuma?", ["No", "Sí"])
             submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
             if submitted and nombre and cedula:
@@ -306,10 +298,10 @@ def render_control_panel():
         st.markdown("### Acerca de esta Herramienta")
         st.markdown(f"**Versión:** {APP_VERSION}")
         st.markdown(
-            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
-            "seguimiento y análisis de pacientes. Utiliza un sistema de diagnóstico híbrido que combina "
-            "un modelo de machine learning para el cálculo de riesgo cuantitativo con un modelo de lenguaje "
-            "avanzado para la interpretación clínica cualitativa."
+            "Esta es una suite de software diseñada para asistir a profesionales de la salud. "
+            "Utiliza un sistema de diagnóstico híbrido que combina un modelo de machine learning "
+            "para el cálculo de riesgo cuantitativo con un modelo de lenguaje avanzado para la "
+            "interpretación clínica cualitativa."
         )
         st.divider()
         st.markdown("##### Autor")
@@ -344,20 +336,20 @@ def render_patient_dashboard():
                         if 'risk_index' in row:
                             risk = row['risk_index']
                             if risk < 30:
-                                st.success(f"Índice de Riesgo Cardiovascular: {risk}/100 (Bajo)")
+                                st.success(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Bajo)")
                             elif risk < 60:
-                                st.warning(f"Índice de Riesgo Cardiovascular: {risk}/100 (Moderado)")
+                                st.warning(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Moderado)")
                             else:
-                                st.error(f"Índice de Riesgo Cardiovascular: {risk}/100 (Alto)")
+                                st.error(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Alto)")
                         else:
-                            st.info("Aún no se ha calculado el riesgo para esta consulta.")
+                            st.info("Aún no se ha calculado el riesgo.")
                     
                     with col2:
                         st.markdown("**Análisis Cualitativo (IA - Gemini Pro)**")
                         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
                             st.markdown(row['ai_analysis'])
                         else:
-                            st.info("Aún no se ha generado el análisis de IA para esta consulta.")
+                            st.info("Aún no se ha generado el análisis de IA.")
                     
                     if 'risk_index' not in row or 'ai_analysis' not in row:
                         if st.button("Generar Análisis Completo", key=f"analyze_{row['id']}"):
@@ -398,3 +390,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
