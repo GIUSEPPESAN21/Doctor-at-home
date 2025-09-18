@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 23.0 ("Hybrid Control Panel Suite")
-Descripción: Esta versión fusiona la avanzada interfaz de usuario del panel de
-control con el potente sistema de diagnóstico híbrido. Mantiene
-el flujo de trabajo centrado en el médico y la interfaz de pestañas,
-mientras integra el modelo de machine learning (Scikit-learn) y la IA
-avanzada (Gemini 1.5 Pro) para un análisis clínico completo.
+Versión: 24.0 ("Optimized Hybrid Suite")
+Descripción: Esta versión fusiona la interfaz de usuario del panel de control
+(v21) con el sistema de diagnóstico híbrido. Reimplementa el modelo de IA
+estándar (Gemini 1.5 Flash) para optimizar velocidad y uso gratuito,
+manteniendo el modelo de machine learning (Scikit-learn) para un análisis
+clínico completo y eficiente.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -30,7 +30,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-APP_VERSION = "23.0.0 (Hybrid Control Panel Suite)"
+APP_VERSION = "24.0.0 (Optimized Hybrid Suite)"
 
 # ==============================================================================
 # MÓDULO 1: MODELO DE MACHINE LEARNING
@@ -87,7 +87,8 @@ def init_connections():
     try:
         api_key = st.secrets["gemini_api_key"]
         genai.configure(api_key=api_key)
-        model_client = genai.GenerativeModel('gemini-1.5-pro-latest')
+        # --- CAMBIO: Volviendo al modelo Flash para optimización ---
+        model_client = genai.GenerativeModel('gemini-1.5-flash-latest')
     except Exception as e:
         st.error(f"Error crítico al configurar el modelo de IA: {e}", icon="🤖")
         model_client = None
@@ -165,7 +166,7 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _risk_index
 
     **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
 
-    ### Análisis Clínico Integrado por IA (Gemini 1.5 Pro)
+    ### Análisis Clínico Integrado por IA
 
     **1. INTERPRETACIÓN CONJUNTA:**
     (Integra el resultado del modelo predictivo con los datos clínicos.)
@@ -205,11 +206,11 @@ def create_patient_report_pdf(patient_info, history_df):
         imc = str(row.get('imc', 'N/A'))
         vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
         story.append(Paragraph(vitales, styles['Normal']))
-        if 'risk_index' in row:
+        if 'risk_index' in row and pd.notna(row['risk_index']):
              story.append(Paragraph(f"<b>Índice de Riesgo CV (ML):</b> {int(row['risk_index'])}/100", styles['Normal']))
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1*inch))
-            story.append(Paragraph("<b>--- Análisis por IA (Gemini Pro) ---</b>", styles['h3']))
+            story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
             analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('*', '- ')
             story.append(Paragraph(analysis_text, styles['Normal']))
         story.append(Spacer(1, 0.25*inch))
@@ -333,7 +334,7 @@ def render_patient_dashboard():
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown("**Predicción de Riesgo (Machine Learning)**")
-                        if 'risk_index' in row:
+                        if 'risk_index' in row and pd.notna(row['risk_index']):
                             risk = row['risk_index']
                             if risk < 30:
                                 st.success(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Bajo)")
@@ -345,7 +346,7 @@ def render_patient_dashboard():
                             st.info("Aún no se ha calculado el riesgo.")
                     
                     with col2:
-                        st.markdown("**Análisis Cualitativo (IA - Gemini Pro)**")
+                        st.markdown("**Análisis Cualitativo (IA - Gemini)**")
                         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
                             st.markdown(row['ai_analysis'])
                         else:
