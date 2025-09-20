@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 24.0 ("Optimized Hybrid Suite")
-Descripción: Esta versión fusiona la interfaz de usuario del panel de control
-(v21) con el sistema de diagnóstico híbrido. Reimplementa el modelo de IA
-estándar (Gemini 1.5 Flash) para optimizar velocidad y uso gratuito,
-manteniendo el modelo de machine learning (Scikit-learn) para un análisis
-clínico completo y eficiente.
+Versión: 21.0 ("Final UI")
+Descripción: Versión final que refina la interfaz de usuario moviendo la
+sección "Acerca de" desde la página de login a una nueva pestaña dedicada en
+el panel de control principal y eliminando la información de versión para
+lograr un diseño más limpio y profesional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -19,57 +18,16 @@ from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-import numpy as np
-from sklearn.linear_model import LogisticRegression
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Suite Híbrida de Diagnóstico",
-    page_icon="🧬",
+    page_title="Suite Clínica Definitiva",
+    page_icon="🩺",
     layout="wide"
 )
 
-# --- CONSTANTES ---
-APP_VERSION = "24.0.0 (Optimized Hybrid Suite)"
-
 # ==============================================================================
-# MÓDULO 1: MODELO DE MACHINE LEARNING
-# ==============================================================================
-@st.cache_resource
-def load_prediction_model():
-    """
-    Simula la carga de un modelo de Regresión Logística pre-entrenado.
-    """
-    model = LogisticRegression()
-    model.coef_ = np.array([[0.08, 0.05, 0.03, 0.6]])
-    model.intercept_ = np.array([-6.5])
-    model.classes_ = np.array([0, 1])
-    return model
-
-RISK_MODEL = load_prediction_model()
-
-def predict_cardiovascular_risk(model, patient_info, latest_consultation):
-    """
-    Usa el modelo de ML para predecir el riesgo cardiovascular.
-    """
-    try:
-        edad = patient_info.get('edad', 50)
-        imc = latest_consultation.get('imc', 25.0)
-        presion_sistolica = latest_consultation.get('presion_sistolica', 120)
-        es_fumador = 1 if patient_info.get('tabaquismo', 'No') == 'Sí' else 0
-
-        features = np.array([[edad, imc, presion_sistolica, es_fumador]])
-        
-        probability = model.predict_proba(features)[0][1]
-        risk_index = int(probability * 100)
-        
-        return risk_index
-    except Exception as e:
-        st.error(f"Error en el modelo predictivo: {e}")
-        return None
-
-# ==============================================================================
-# MÓDULO 2: CONEXIONES Y GESTIÓN DE ESTADO
+# MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
 # ==============================================================================
 @st.cache_resource
 def init_connections():
@@ -87,7 +45,6 @@ def init_connections():
     try:
         api_key = st.secrets["gemini_api_key"]
         genai.configure(api_key=api_key)
-        # --- CAMBIO: Volviendo al modelo Flash para optimización ---
         model_client = genai.GenerativeModel('gemini-1.5-flash-latest')
     except Exception as e:
         st.error(f"Error crítico al configurar el modelo de IA: {e}", icon="🤖")
@@ -96,13 +53,17 @@ def init_connections():
 
 DB, GEMINI_MODEL = init_connections()
 
+# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
+    st.session_state.physician_email = None
     st.session_state.page = 'login'
     st.session_state.selected_patient_id = None
+    st.session_state.ai_analysis_running = False
+    st.session_state.last_clicked_ai = None
 
 # ==============================================================================
-# MÓDULO 3: LÓGICA DE DATOS
+# MÓDULO 2: LÓGICA DE DATOS (FIRESTORE)
 # ==============================================================================
 def get_physician_patients(physician_email):
     if not DB: return []
@@ -124,11 +85,11 @@ def save_consultation(physician_email, patient_id, consultation_data):
     st.toast("Consulta guardada.", icon="✅")
     return doc_id
 
-def update_consultation_with_analysis(physician_email, patient_id, consultation_id, analysis_data):
+def update_consultation_with_ai_analysis(physician_email, patient_id, consultation_id, ai_report):
     if not DB: return
     consultation_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(consultation_id)
-    consultation_ref.update(analysis_data)
-    st.toast("Análisis guardado en el historial.", icon="🧠")
+    consultation_ref.update({"ai_analysis": ai_report})
+    st.toast("Análisis de IA guardado en el historial.", icon="🧠")
 
 def load_patient_history(physician_email, patient_id):
     if not DB: return pd.DataFrame()
@@ -144,14 +105,14 @@ def load_patient_history(physician_email, patient_id):
     return df
 
 # ==============================================================================
-# MÓDULO 4: IA Y REPORTES
+# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
 # ==============================================================================
-@st.cache_data(show_spinner="Generando análisis cualitativo con IA...", ttl=300)
-def generate_ai_holistic_review(_patient_info, _latest_consultation, _risk_index):
+@st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
+def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
     if not GEMINI_MODEL: return "Servicio de IA no disponible."
     
     prompt = f"""
-    **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente y el resultado de un modelo predictivo para generar un reporte clínico integrado.
+    **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente para generar un reporte clínico estructurado, profesional y accionable.
 
     **CONTEXTO DEL PACIENTE:**
     - Nombre: {str(_patient_info.get('nombre', 'No especificado'))}
@@ -160,23 +121,32 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _risk_index
     **DATOS DE LA CONSULTA ACTUAL:**
     - Motivo: {str(_latest_consultation.get('motivo_consulta', 'No especificado'))}
     - Signos Vitales: PA {str(_latest_consultation.get('presion_sistolica', 'N/A'))}/{str(_latest_consultation.get('presion_diastolica', 'N/A'))} mmHg, Glucemia {str(_latest_consultation.get('glucemia', 'N/A'))} mg/dL, IMC {str(_latest_consultation.get('imc', 'N/A'))} kg/m².
-    
-    **RESULTADO DEL MODELO PREDICTIVO:**
-    - Índice de Riesgo Cardiovascular Calculado: {_risk_index}/100.
+    - Síntomas Relevantes: Cardiovascular({str(_latest_consultation.get('sintomas_cardio', []))}), Respiratorio({str(_latest_consultation.get('sintomas_resp', []))}), Metabólico({str(_latest_consultation.get('sintomas_metabolico', []))})
+
+    **RESUMEN DEL HISTORIAL PREVIO:**
+    {_history_summary}
 
     **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
 
-    ### Análisis Clínico Integrado por IA
+    ### Análisis Clínico Integral por IA
 
-    **1. INTERPRETACIÓN CONJUNTA:**
-    (Integra el resultado del modelo predictivo con los datos clínicos.)
+    **1. RESUMEN DEL CASO:**
+    (Presenta un resumen conciso del paciente, su edad, y el motivo de la consulta actual en el contexto de su historial.)
 
     **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
-    (Basado en toda la información, ¿cuál es el diagnóstico más probable?)
+    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales que deberían ser considerados y por qué.)
 
-    **3. PLAN DE MANEJO SUGERIDO:**
-    - **Estudios Diagnósticos:** (Lista de exámenes necesarios.)
-    - **Tratamiento y Metas:** (Recomendaciones de tratamiento y objetivos claros.)
+    **3. ESTRATIFICACIÓN DEL RIESGO:**
+    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica tu respuesta basándote en los datos.)
+
+    **4. PLAN DE MANEJO SUGERIDO:**
+    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos.)
+    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida.)
+    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica.)
+    - **Metas Terapéuticas:** (Establece objetivos numéricos claros.)
+
+    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
+    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente.)
     """
     try:
         response = GEMINI_MODEL.generate_content(prompt)
@@ -184,6 +154,9 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _risk_index
     except Exception as e:
         return f"**Error al generar recomendaciones:** {e}"
 
+# ==============================================================================
+# MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
+# ==============================================================================
 def create_patient_report_pdf(patient_info, history_df):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer)
@@ -206,8 +179,6 @@ def create_patient_report_pdf(patient_info, history_df):
         imc = str(row.get('imc', 'N/A'))
         vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
         story.append(Paragraph(vitales, styles['Normal']))
-        if 'risk_index' in row and pd.notna(row['risk_index']):
-             story.append(Paragraph(f"<b>Índice de Riesgo CV (ML):</b> {int(row['risk_index'])}/100", styles['Normal']))
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1*inch))
             story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
@@ -224,12 +195,15 @@ def create_patient_report_pdf(patient_info, history_df):
 # ==============================================================================
 def render_login_page():
     st.title("Plataforma de Gestión Clínica")
+    
+    # --- CAMBIO: Formulario de login centrado y sin columnas ---
     with st.container(border=True):
       with st.form("login_form"):
           email = st.text_input("Correo Electrónico del Médico")
           password = st.text_input("Contraseña", type="password")
           login_button = st.form_submit_button("Iniciar Sesión", use_container_width=True, type="primary")
           register_button = st.form_submit_button("Registrarse", use_container_width=True)
+          
       if login_button:
           try:
               user = auth.get_user_by_email(email)
@@ -265,7 +239,10 @@ def render_main_app():
 
 def render_control_panel():
     st.title("Panel de Control Médico")
+
+    # --- CAMBIO: Nueva pestaña "Acerca de" ---
     tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
+
     with tab1:
         st.header("Registrar Nuevo Paciente")
         with st.form("new_patient_form", clear_on_submit=True):
@@ -275,17 +252,16 @@ def render_control_panel():
             edad = c3.number_input("Edad", min_value=0, max_value=120)
             direccion = st.text_input("Dirección de Residencia")
             telefono = st.text_input("Teléfono")
-            tabaquismo = st.selectbox("¿El paciente fuma?", ["No", "Sí"])
             submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
             if submitted and nombre and cedula:
-                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion, "tabaquismo": tabaquismo})
+                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
                 st.rerun()
         
         st.divider()
         st.header("Seleccionar Paciente Existente")
         patients = get_physician_patients(st.session_state.physician_email)
         if not patients:
-            st.info("No hay pacientes registrados.")
+            st.info("No hay pacientes registrados. Agregue uno nuevo para comenzar.")
         else:
             for patient in patients:
                 col1, col2, col3 = st.columns([3, 2, 1])
@@ -295,19 +271,24 @@ def render_control_panel():
                     st.session_state.selected_patient_id = patient['id']
                     st.session_state.page = 'patient_dashboard'
                     st.rerun()
+
+    # --- CAMBIO: Contenido movido a la nueva pestaña ---
     with tab2:
         st.markdown("### Acerca de esta Herramienta")
-        st.markdown(f"**Versión:** {APP_VERSION}")
         st.markdown(
-            "Esta es una suite de software diseñada para asistir a profesionales de la salud. "
-            "Utiliza un sistema de diagnóstico híbrido que combina un modelo de machine learning "
-            "para el cálculo de riesgo cuantitativo con un modelo de lenguaje avanzado para la "
-            "interpretación clínica cualitativa."
+            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
+            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
+            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
         )
         st.divider()
         st.markdown("##### Autor")
         st.write("**Joseph Javier Sánchez Acuña**")
         st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
+        st.markdown("---")
+        st.markdown("##### Contacto")
+        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
+        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
+        st.write("📧 joseph.sanchez@uniminuto.edu.co")
 
 def render_patient_dashboard():
     patient_id = st.session_state.selected_patient_id
@@ -319,7 +300,12 @@ def render_patient_dashboard():
 
     if not df_history.empty:
         pdf_data = create_patient_report_pdf(patient_info, df_history)
-        st.download_button(label="📄 Descargar Reporte Completo en PDF", data=pdf_data, file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf", mime="application/pdf")
+        st.download_button(
+            label="📄 Descargar Reporte Completo en PDF",
+            data=pdf_data,
+            file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf",
+            mime="application/pdf",
+        )
 
     tab1, tab2 = st.tabs(["📈 Historial de Consultas", "✍️ Registrar Nueva Consulta"])
 
@@ -327,41 +313,28 @@ def render_patient_dashboard():
         if df_history.empty:
             st.info("Este paciente no tiene consultas.")
         else:
+            if st.session_state.ai_analysis_running:
+                consultation_id_to_process = st.session_state.last_clicked_ai
+                row_to_process = df_history[df_history['id'] == consultation_id_to_process].iloc[0]
+                history_summary = "..."
+                with st.spinner("Contactando al asistente de IA..."):
+                    ai_report = generate_ai_holistic_review(patient_info, row_to_process.to_dict(), history_summary)
+                    update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id_to_process, ai_report)
+                st.session_state.ai_analysis_running = False
+                st.session_state.last_clicked_ai = None
+                st.rerun()
+
             for _, row in df_history.iterrows():
                 with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
                     st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        st.markdown("**Predicción de Riesgo (Machine Learning)**")
-                        if 'risk_index' in row and pd.notna(row['risk_index']):
-                            risk = row['risk_index']
-                            if risk < 30:
-                                st.success(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Bajo)")
-                            elif risk < 60:
-                                st.warning(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Moderado)")
-                            else:
-                                st.error(f"Índice de Riesgo Cardiovascular: {int(risk)}/100 (Alto)")
-                        else:
-                            st.info("Aún no se ha calculado el riesgo.")
-                    
-                    with col2:
-                        st.markdown("**Análisis Cualitativo (IA - Gemini)**")
-                        if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-                            st.markdown(row['ai_analysis'])
-                        else:
-                            st.info("Aún no se ha generado el análisis de IA.")
-                    
-                    if 'risk_index' not in row or 'ai_analysis' not in row:
-                        if st.button("Generar Análisis Completo", key=f"analyze_{row['id']}"):
-                            with st.spinner("Ejecutando modelos..."):
-                                risk_index = predict_cardiovascular_risk(RISK_MODEL, patient_info, row.to_dict())
-                                ai_report = generate_ai_holistic_review(patient_info, row.to_dict(), risk_index)
-                                update_consultation_with_analysis(st.session_state.physician_email, patient_id, row['id'], {
-                                    "risk_index": risk_index,
-                                    "ai_analysis": ai_report
-                                })
-                                st.rerun()
+                    if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
+                        st.markdown(row['ai_analysis'])
+                    else:
+                        button_key = f"ai_{row['id']}"
+                        if st.button("Generar Análisis con IA", key=button_key, disabled=st.session_state.ai_analysis_running):
+                            st.session_state.ai_analysis_running = True
+                            st.session_state.last_clicked_ai = row['id']
+                            st.rerun()
 
     with tab2:
         with st.form("new_consultation_form"):
@@ -374,9 +347,22 @@ def render_patient_dashboard():
                 frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
                 glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
                 imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
+            with st.expander("2. Revisión por Sistemas (Síntomas)"):
+                sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
+                sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
+                sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
+            with st.expander("3. Factores de Riesgo y Estilo de Vida"):
+                c1, c2 = st.columns(2)
+                dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
+                ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
             submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
             if submitted:
-                consultation_data = { "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica, "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc }
+                consultation_data = {
+                    "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
+                    "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc,
+                    "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
+                    "dieta": dieta, "ejercicio": ejercicio
+                }
                 save_consultation(st.session_state.physician_email, patient_id, consultation_data)
                 st.rerun()
 
@@ -391,4 +377,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
