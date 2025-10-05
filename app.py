@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 21.1 ("Resilient AI")
-Descripción: Versión corregida que implementa un sistema de fallback para la 
-conexión con la API de Gemini, probando múltiples modelos para asegurar la 
-disponibilidad del servicio y eliminar el error 404.
+Versión: 21.2 ("Robust AI Connection")
+Descripción: Versión final que soluciona el error de conexión implementando 
+una lista de modelos de IA actualizada, configuraciones de seguridad para 
+contenido médico y parámetros de generación optimizados para mayor fiabilidad.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -30,6 +30,7 @@ st.set_page_config(
 # ==============================================================================
 @st.cache_resource
 def init_connections():
+    # Conexión a Firebase
     try:
         creds_dict = dict(st.secrets["firebase_credentials"])
         creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
@@ -41,15 +42,19 @@ def init_connections():
         st.error(f"Error crítico al conectar con Firebase: {e}", icon="🔥")
         db_client = None
 
-    # [MODIFICADO] La inicialización del modelo se elimina de aquí,
-    # ya que ahora se manejará dinámicamente en la función de análisis.
+    # Configuración de la API de IA
     try:
-        api_key = st.secrets["gemini_api_key"]
-        genai.configure(api_key=api_key)
-        model_configured = True
+        if "gemini_api_key" not in st.secrets:
+            st.error("Error de configuración: 'gemini_api_key' no encontrada en los secretos.", icon="🔑")
+            model_configured = False
+        else:
+            api_key = st.secrets["gemini_api_key"]
+            genai.configure(api_key=api_key)
+            model_configured = True
     except Exception as e:
         st.error(f"Error crítico al configurar la API de IA: {e}", icon="🤖")
         model_configured = False
+        
     return db_client, model_configured
 
 DB, IS_MODEL_CONFIGURED = init_connections()
@@ -106,17 +111,33 @@ def load_patient_history(physician_email, patient_id):
     return df
 
 # ==============================================================================
-# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI) - [CORREGIDO]
+# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI) - [CORREGIDO V2]
 # ==============================================================================
 @st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
 def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
-    if not IS_MODEL_CONFIGURED: return "Servicio de IA no disponible."
+    if not IS_MODEL_CONFIGURED:
+        return "Error de configuración: La `gemini_api_key` no se encontró en los secretos de Streamlit. Por favor, configúrela para poder continuar."
     
-    # [CORREGIDO] Se define una lista de modelos a probar, del más nuevo al más antiguo.
-    # Esto resuelve el error 404 al no depender de un solo nombre de modelo.
+    # [CORREGIDO V2] Configuración de generación optimizada para análisis clínico
+    generation_config = {
+        "temperature": 0.3,
+        "top_p": 0.95,
+        "top_k": 40,
+        "max_output_tokens": 4096,
+    }
+
+    # [CORREGIDO V2] Configuración de seguridad menos restrictiva para contenido médico
+    safety_settings = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
+        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
+        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
+    ]
+    
+    # [CORREGIDO V2] Lista de modelos actualizada en orden de preferencia
     model_list = [
-        "gemini-1.5-flash-latest", # Se mantiene como primera opción por si lo reactivan
-        "gemini-1.5-pro-latest",
+        "gemini-2.0-flash-exp",
+        "gemini-1.5-pro-001",
         "gemini-1.5-flash-001",
         "gemini-1.5-flash",
     ]
@@ -139,41 +160,46 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_su
     **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
 
     ### Análisis Clínico Integral por IA
-
     **1. RESUMEN DEL CASO:**
     (Presenta un resumen conciso del paciente, su edad, y el motivo de la consulta actual en el contexto de su historial.)
-
     **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
-    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales que deberían ser considerados y por qué.)
-
+    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales.)
     **3. ESTRATIFICACIÓN DEL RIESGO:**
-    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica tu respuesta basándote en los datos.)
-
+    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica.)
     **4. PLAN DE MANEJO SUGERIDO:**
-    - **Estudios Diagnósticos:** (Lista de exámenes de laboratorio o imágenes necesarios para confirmar/descartar los diagnósticos.)
+    - **Estudios Diagnósticos:** (Lista de exámenes necesarios.)
     - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida.)
-    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos a considerar si aplica.)
+    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos.)
     - **Metas Terapéuticas:** (Establece objetivos numéricos claros.)
-
-    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
-    (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente.)
+    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACiente:**
+    (Proporciona 3-4 puntos en lenguaje sencillo.)
     """
     
-    # [CORREGIDO] Bucle para probar cada modelo de la lista hasta que uno funcione.
     for model_name in model_list:
         try:
-            model_client = genai.GenerativeModel(model_name)
+            model_client = genai.GenerativeModel(
+                model_name=model_name,
+                generation_config=generation_config,
+                safety_settings=safety_settings
+            )
             response = model_client.generate_content(prompt)
-            # Si tiene éxito, retorna el texto y sale del bucle
-            st.info(f"Análisis generado con el modelo: {model_name}")
+            st.success(f"Análisis generado con el modelo: {model_name}", icon="🤖")
             return response.text
         except Exception as e:
-            # Si falla, lo registra y prueba con el siguiente modelo
-            print(f"Modelo {model_name} falló: {e}. Intentando con el siguiente.")
+            print(f"ADVERTENCIA: El modelo '{model_name}' falló con el error: {e}. Probando el siguiente.")
             continue
             
-    # Si todos los modelos fallan, retorna un mensaje de error.
-    return "**Error al generar recomendaciones:** No se pudo conectar con ningún modelo de IA disponible. Por favor, intente más tarde."
+    # [CORREGIDO V2] Mensaje de error más detallado si todos los modelos fallan.
+    return """
+    **Error: No se pudo conectar con ningún modelo de IA disponible.**
+
+    **Posibles Causas:**
+    1.  **API Key Inválida:** Verifique que su `gemini_api_key` en los secretos de Streamlit sea correcta y esté activa.
+    2.  **Problemas de Red:** Asegúrese de que la aplicación tenga conexión a los servicios de Google AI.
+    3.  **Servicio No Disponible:** Es posible que los servicios de Google AI estén experimentando una interrupción temporal.
+
+    Por favor, revise su configuración y vuelva a intentarlo más tarde.
+    """
 
 # ==============================================================================
 # MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
@@ -395,3 +421,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
