@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral
-Versión: 21.0 ("Final UI")
-Descripción: Versión final que refina la interfaz de usuario moviendo la
-sección "Acerca de" desde la página de login a una nueva pestaña dedicada en
-el panel de control principal y eliminando la información de versión para
-lograr un diseño más limpio y profesional.
+Versión: 21.1 ("Resilient AI")
+Descripción: Versión corregida que implementa un sistema de fallback para la 
+conexión con la API de Gemini, probando múltiples modelos para asegurar la 
+disponibilidad del servicio y eliminar el error 404.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -42,16 +41,18 @@ def init_connections():
         st.error(f"Error crítico al conectar con Firebase: {e}", icon="🔥")
         db_client = None
 
+    # [MODIFICADO] La inicialización del modelo se elimina de aquí,
+    # ya que ahora se manejará dinámicamente en la función de análisis.
     try:
         api_key = st.secrets["gemini_api_key"]
         genai.configure(api_key=api_key)
-        model_client = genai.GenerativeModel('gemini-1.5-flash-latest')
+        model_configured = True
     except Exception as e:
-        st.error(f"Error crítico al configurar el modelo de IA: {e}", icon="🤖")
-        model_client = None
-    return db_client, model_client
+        st.error(f"Error crítico al configurar la API de IA: {e}", icon="🤖")
+        model_configured = False
+    return db_client, model_configured
 
-DB, GEMINI_MODEL = init_connections()
+DB, IS_MODEL_CONFIGURED = init_connections()
 
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'logged_in' not in st.session_state:
@@ -105,12 +106,21 @@ def load_patient_history(physician_email, patient_id):
     return df
 
 # ==============================================================================
-# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI)
+# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI) - [CORREGIDO]
 # ==============================================================================
 @st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
 def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
-    if not GEMINI_MODEL: return "Servicio de IA no disponible."
+    if not IS_MODEL_CONFIGURED: return "Servicio de IA no disponible."
     
+    # [CORREGIDO] Se define una lista de modelos a probar, del más nuevo al más antiguo.
+    # Esto resuelve el error 404 al no depender de un solo nombre de modelo.
+    model_list = [
+        "gemini-1.5-flash-latest", # Se mantiene como primera opción por si lo reactivan
+        "gemini-1.5-pro-latest",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-flash",
+    ]
+
     prompt = f"""
     **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente para generar un reporte clínico estructurado, profesional y accionable.
 
@@ -148,11 +158,22 @@ def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_su
     **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACIENTE:**
     (Proporciona 3-4 puntos en lenguaje sencillo para que el médico discuta con el paciente.)
     """
-    try:
-        response = GEMINI_MODEL.generate_content(prompt)
-        return response.text
-    except Exception as e:
-        return f"**Error al generar recomendaciones:** {e}"
+    
+    # [CORREGIDO] Bucle para probar cada modelo de la lista hasta que uno funcione.
+    for model_name in model_list:
+        try:
+            model_client = genai.GenerativeModel(model_name)
+            response = model_client.generate_content(prompt)
+            # Si tiene éxito, retorna el texto y sale del bucle
+            st.info(f"Análisis generado con el modelo: {model_name}")
+            return response.text
+        except Exception as e:
+            # Si falla, lo registra y prueba con el siguiente modelo
+            print(f"Modelo {model_name} falló: {e}. Intentando con el siguiente.")
+            continue
+            
+    # Si todos los modelos fallan, retorna un mensaje de error.
+    return "**Error al generar recomendaciones:** No se pudo conectar con ningún modelo de IA disponible. Por favor, intente más tarde."
 
 # ==============================================================================
 # MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
@@ -196,7 +217,6 @@ def create_patient_report_pdf(patient_info, history_df):
 def render_login_page():
     st.title("Plataforma de Gestión Clínica")
     
-    # --- CAMBIO: Formulario de login centrado y sin columnas ---
     with st.container(border=True):
       with st.form("login_form"):
           email = st.text_input("Correo Electrónico del Médico")
@@ -240,7 +260,6 @@ def render_main_app():
 def render_control_panel():
     st.title("Panel de Control Médico")
 
-    # --- CAMBIO: Nueva pestaña "Acerca de" ---
     tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
 
     with tab1:
@@ -272,7 +291,6 @@ def render_control_panel():
                     st.session_state.page = 'patient_dashboard'
                     st.rerun()
 
-    # --- CAMBIO: Contenido movido a la nueva pestaña ---
     with tab2:
         st.markdown("### Acerca de esta Herramienta")
         st.markdown(
