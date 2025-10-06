@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 24.1 ("PDF Generation Fix")
-Descripción: Corrige un error crítico en la generación de PDFs que ocurría
-cuando el texto de la IA contenía formato Markdown. Se implementa una función
-de limpieza para convertir de forma segura el Markdown a un HTML compatible
-con ReportLab, evitando errores de parsing.
+Versión: 24.2 ("Enhanced Consultation Form")
+Descripción: Mejora el formulario de nueva consulta para capturar datos más
+detallados, reintroduciendo campos para síntomas por sistemas y factores de
+riesgo como la dieta y el ejercicio. Esto permite un análisis de IA más
+preciso y un historial clínico más completo.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -15,7 +15,7 @@ from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
-import re # <--- [CORRECCIÓN] Importado para manejar el texto
+import re 
 
 # --- MÓDulos PERSONALIZADOS ---
 import firebase_utils
@@ -172,7 +172,6 @@ def create_patient_report_pdf(patient_info, history_df):
             story.append(Spacer(1, 0.1 * inch))
             story.append(Paragraph("<b>--- Análisis por IA (SaludIA) ---</b>", styles['Normal']))
             
-            # [CORRECCIÓN] Se utiliza la nueva función para limpiar el texto de la IA
             raw_text = str(row['ai_analysis'])
             analysis_text = clean_html_for_reportlab(raw_text)
             
@@ -316,18 +315,43 @@ def render_patient_dashboard():
         render_new_consultation_form(patient_id)
 
 def render_new_consultation_form(patient_id):
+    """Renderiza el formulario de nueva consulta con campos detallados."""
     with st.form("new_consultation_form"):
         st.header("Datos de la Consulta")
+        
         with st.expander("1. Anamnesis y Vitales", expanded=True):
             motivo = st.text_area("Motivo de Consulta y Notas")
             cols = st.columns(5)
             sistolica = cols[0].number_input("PA Sistólica", 0, value=120)
             diastolica = cols[1].number_input("PA Diastólica", 0, value=80)
             frec_cardiaca = cols[2].number_input("Frec. Cardíaca", 0, value=70)
-            glucemia = cols[3].number_input("Glucemia", 0, value=95)
-            imc = cols[4].number_input("IMC", 0.0, format="%.1f", value=24.5)
+            glucemia = cols[3].number_input("Glucemia (mg/dL)", 0, value=95)
+            imc = cols[4].number_input("IMC (kg/m²)", 0.0, format="%.1f", value=24.5)
+
+        with st.expander("2. Revisión por Sistemas (Síntomas)"):
+            sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema", "Síncope"])
+            sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias", "Hemoptisis"])
+            sintomas_metabolico = st.multiselect("Metabólico/Endocrino", ["Polidipsia", "Poliuria", "Pérdida de peso", "Intolerancia al frío/calor"])
+
+        with st.expander("3. Factores de Riesgo y Estilo de Vida"):
+            c1, c2 = st.columns(2)
+            dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
+            ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
+
         if st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary"):
-            data = {"motivo_consulta": motivo, "presion_sistolica": sistolica, "presion_diastolica": diastolica, "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc}
+            data = {
+                "motivo_consulta": motivo, 
+                "presion_sistolica": sistolica, 
+                "presion_diastolica": diastolica, 
+                "frec_cardiaca": frec_cardiaca, 
+                "glucemia": glucemia, 
+                "imc": imc,
+                "sintomas_cardio": sintomas_cardio,
+                "sintomas_resp": sintomas_resp,
+                "sintomas_metabolico": sintomas_metabolico,
+                "dieta": dieta,
+                "ejercicio": ejercicio
+            }
             firebase_utils.save_consultation(st.session_state.physician_email, patient_id, data)
             st.rerun()
 
