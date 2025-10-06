@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 25.1 ("Cohesive Clinical Palette")
-Descripción: Refinamiento final de la interfaz de usuario. Se reemplaza el
-color rojo de los botones de acción por un verde azulado clínico para
-cohesión. Se mejora el estilo de las pestañas para que coincidan con la
-nueva paleta de colores, logrando una estética visual unificada.
+Versión: 26.0 ("Final UI Polish & About Section Overhaul")
+Descripción: Refinamiento final de la interfaz con una paleta de colores
+más sofisticada y profesional. Se mejoran los títulos, tarjetas y se
+actualiza completamente la sección "Acerca de" con un nuevo diseño.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -35,26 +34,26 @@ def apply_custom_styling():
     """Inyecta CSS personalizado para una interfaz de usuario mejorada."""
     custom_css = """
     <style>
-        /* --- Paleta de Colores Clínicos y Variables --- */
+        /* --- Paleta de Colores Final y Refinada --- */
         :root {
-            --primary-color: #0077b6; /* Azul clínico, profesional */
-            --primary-hover: #023e8a;
-            --success-color: #2a9d8f; /* Verde azulado para acciones positivas */
-            --success-hover: #248a7f;
-            --background-color: #f4f7f9; /* Gris azulado muy claro */
-            --text-color: #333333;
+            --primary-color: #1a73e8; /* Un azul corporativo más brillante */
+            --primary-hover: #1765cc;
+            --success-color: #1e8e3e; /* Un verde más oscuro y profesional */
+            --success-hover: #1a7a35;
+            --background-color: #f8f9fa; 
+            --text-color: #3c4043;
             --card-bg-color: #ffffff;
-            --border-color: #dee2e6;
-            --shadow-color: rgba(0, 0, 0, 0.08);
+            --border-color: #dadce0;
+            --shadow-color: rgba(60, 64, 67, 0.15);
         }
 
-        /* --- Estilo General del Body --- */
+        /* --- Estilo General --- */
         .stApp {
             background-color: var(--background-color);
             color: var(--text-color);
         }
         
-        /* --- Animación de Entrada Mejorada --- */
+        /* --- Animación de Entrada --- */
         @keyframes fadeInUp {
             from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
@@ -63,21 +62,25 @@ def apply_custom_styling():
             animation: fadeInUp 0.5s ease-out forwards;
         }
 
-        /* --- Estilo de Botones Rediseñado --- */
+        /* --- Estilo de Títulos con Gradiente --- */
+        h1, h2, h3 {
+            color: var(--primary-color);
+        }
+        
+        /* --- Estilo de Botones --- */
         div[data-testid="stButton"] > button {
             border-radius: 8px;
             padding: 10px 18px;
             font-weight: 600;
             border: none;
-            box-shadow: 0 2px 5px var(--shadow-color);
-            transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
+            box-shadow: 0 1px 3px var(--shadow-color);
+            transition: all 0.2s ease;
         }
         div[data-testid="stButton"] > button:hover {
-            transform: translateY(-3px);
-            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px var(--shadow-color);
         }
         
-        /* [CORRECCIÓN] Botones Primarios ahora usan el color de éxito */
         div[data-testid="stButton"] > button[kind="primary"] {
             background-color: var(--success-color);
             color: white;
@@ -86,14 +89,13 @@ def apply_custom_styling():
             background-color: var(--success-hover);
         }
         
-        /* Botones Secundarios */
         div[data-testid="stButton"] > button[kind="secondary"] {
             background-color: var(--card-bg-color);
             color: var(--primary-color);
             border: 1px solid var(--border-color);
         }
          div[data-testid="stButton"] > button[kind="secondary"]:hover {
-            background-color: #e9f5ff;
+            background-color: #f1f8ff;
             border-color: var(--primary-color);
         }
         
@@ -102,29 +104,19 @@ def apply_custom_styling():
             background-color: var(--card-bg-color);
             border-radius: 12px;
             border: 1px solid var(--border-color);
-            box-shadow: 0 4px 12px var(--shadow-color);
+            box-shadow: 0 1px 4px var(--shadow-color);
             padding: 1.2em;
-            transition: box-shadow 0.3s ease;
+            border-top: 4px solid var(--primary-color);
         }
         
-        /* --- Estilo de Pestañas (Tabs) Mejorado --- */
-        button[data-baseweb="tab"] {
-            border-radius: 8px 8px 0 0 !important;
-            transition: background-color 0.2s ease;
-        }
+        /* --- Estilo de Pestañas (Tabs) --- */
         button[data-baseweb="tab"][aria-selected="true"] {
             background-color: var(--card-bg-color) !important;
-            border-bottom: 3px solid var(--primary-color) !important;
+            border-bottom-color: var(--primary-color) !important;
             color: var(--primary-color) !important;
             font-weight: 600;
         }
         
-        /* --- Estilo de Expanders --- */
-        .st-emotion-cache-1h9usn1 {
-            border-radius: 8px;
-            border: 1px solid var(--border-color);
-            background-color: #f8fcff;
-        }
     </style>
     """
     st.markdown(custom_css, unsafe_allow_html=True)
@@ -190,7 +182,7 @@ def create_patient_report_pdf(patient_info, history_df):
     return buffer.getvalue()
 
 # ==============================================================================
-# MÓDULO 3: VISTAS Y COMPONENTES DE UI (Sin cambios lógicos)
+# MÓDULO 3: VISTAS Y COMPONENTES DE UI (Sección "Acerca de" actualizada)
 # ==============================================================================
 def render_login_page():
     st.markdown("<h1 style='text-align: center; color: var(--primary-color);'>🤖 SaludIA</h1>", unsafe_allow_html=True)
@@ -250,7 +242,7 @@ def render_main_app():
 
 def render_control_panel():
     st.title("Panel de Control de SaludIA")
-    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
+    tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "👥 Acerca de"])
     with tab1:
         st.header("Registrar Nuevo Paciente")
         with st.form("new_patient_form", clear_on_submit=True):
@@ -280,10 +272,25 @@ def render_control_panel():
                         st.session_state.selected_patient_id = patient['id']
                         st.session_state.page = 'patient_dashboard'
                         st.rerun()
+    
+    # [NUEVO] Sección "Acerca de" actualizada con tu información
     with tab2:
-        st.markdown("### Acerca de SaludIA")
-        st.markdown("Esta suite asiste a profesionales de la salud en el seguimiento y análisis de pacientes, utilizando IA para generar recomendaciones y optimizar el flujo de trabajo.")
-        st.write("**Autor:** Joseph Javier Sánchez Acuña")
+        st.header("👥 Sobre el Proyecto y su Creador")
+        with st.container(border=True):
+            col_img, col_info = st.columns([1, 3])
+            with col_img:
+                st.image("https://placehold.co/250x250/1a73e8/FFFFFF?text=J.S.", caption="Joseph Javier Sánchez Acuña")
+            with col_info:
+                st.title("Joseph Javier Sánchez Acuña")
+                st.subheader("_Estudiante de Ingeniería Industrial_")
+                st.subheader("_Experto en Inteligencia Artificial y Desarrollo de Software._")
+                st.markdown(
+                    """
+                    - 🔗 **LinkedIn:** [joseph-javier-sánchez-acuña](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)
+                    - 📂 **GitHub:** [GIUSEPPESAN21](https://github.com/GIUSEPPESAN21)
+                    - 📧 **Email:** [joseph.sanchez@uniminuto.edu.co](mailto:joseph.sanchez@uniminuto.edu.co)
+                    """
+                )
 
 def render_patient_dashboard():
     patient_id = st.session_state.selected_patient_id
