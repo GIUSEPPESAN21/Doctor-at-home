@@ -1,11 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 24.2 ("Enhanced Consultation Form")
-Descripción: Mejora el formulario de nueva consulta para capturar datos más
-detallados, reintroduciendo campos para síntomas por sistemas y factores de
-riesgo como la dieta y el ejercicio. Esto permite un análisis de IA más
-preciso y un historial clínico más completo.
+Versión: 25.0 ("Clinical UI Refinement")
+Descripción: Renovación visual completa con una paleta de colores clínicos
+(azules y verdes), botones rediseñados con gradientes y sombras mejoradas,
+y animaciones más fluidas para una experiencia de usuario superior.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -35,16 +34,16 @@ def apply_custom_styling():
     """Inyecta CSS personalizado para una interfaz de usuario mejorada."""
     custom_css = """
     <style>
-        /* --- Paleta de Colores y Variables --- */
+        /* --- Paleta de Colores Clínicos y Variables --- */
         :root {
-            --primary-color: #007bff; /* Un azul más vibrante */
-            --primary-hover: #0069d9;
-            --secondary-color: #f0f2f5; 
-            --background-color: #f8f9fa;
-            --text-color: #212529;
+            --primary-color: #0077b6; /* Azul clínico, profesional */
+            --primary-hover: #023e8a;
+            --success-color: #2a9d8f; /* Verde azulado para acciones positivas */
+            --background-color: #f4f7f9; /* Gris azulado muy claro */
+            --text-color: #333333;
             --card-bg-color: #ffffff;
             --border-color: #dee2e6;
-            --shadow-color: rgba(0, 0, 0, 0.075);
+            --shadow-color: rgba(0, 0, 0, 0.08);
         }
 
         /* --- Estilo General del Body --- */
@@ -53,27 +52,27 @@ def apply_custom_styling():
             color: var(--text-color);
         }
         
-        /* --- Animación de Entrada --- */
-        @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(15px); }
+        /* --- Animación de Entrada Mejorada --- */
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
         .main > div {
-            animation: fadeIn 0.6s ease-out;
+            animation: fadeInUp 0.5s ease-out forwards;
         }
 
-        /* --- Estilo de Botones Personalizado --- */
+        /* --- Estilo de Botones Rediseñado --- */
         div[data-testid="stButton"] > button {
-            border-radius: 0.5rem;
-            padding: 0.6em 1.2em;
+            border-radius: 8px;
+            padding: 10px 18px;
             font-weight: 600;
-            transition: all 0.25s ease-in-out;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-            border: 1px solid var(--primary-color);
+            border: none;
+            box-shadow: 0 2px 5px var(--shadow-color);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
         }
         div[data-testid="stButton"] > button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 12px rgba(0,0,0,0.1);
+            transform: translateY(-3px);
+            box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
         }
         
         /* Botones Primarios */
@@ -83,32 +82,37 @@ def apply_custom_styling():
         }
         div[data-testid="stButton"] > button[kind="primary"]:hover {
             background-color: var(--primary-hover);
-            border-color: var(--primary-hover);
         }
         
         /* Botones Secundarios */
         div[data-testid="stButton"] > button[kind="secondary"] {
             background-color: var(--card-bg-color);
             color: var(--primary-color);
+            border: 1px solid var(--border-color);
         }
          div[data-testid="stButton"] > button[kind="secondary"]:hover {
-            background-color: #e6f2ff;
+            background-color: #e9f5ff;
+            border-color: var(--primary-color);
         }
         
-        /* --- Estilo de Contenedores y Tarjetas --- */
+        /* --- Estilo de Contenedores y Tarjetas con Transición --- */
         [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlockBorderWrapper"] {
             background-color: var(--card-bg-color);
-            border-radius: 0.75rem;
+            border-radius: 12px;
             border: 1px solid var(--border-color);
             box-shadow: 0 4px 12px var(--shadow-color);
-            padding: 1em;
+            padding: 1.2em;
+            transition: box-shadow 0.3s ease;
+        }
+        [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlockBorderWrapper"]:hover {
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
         }
         
         /* --- Estilo de Expanders --- */
         .st-emotion-cache-1h9usn1 {
-            border-radius: 0.5rem;
+            border-radius: 8px;
             border: 1px solid var(--border-color);
-            background-color: #f7faff;
+            background-color: #f8fcff;
         }
     </style>
     """
@@ -134,23 +138,15 @@ if 'logged_in' not in st.session_state:
     st.session_state.last_clicked_ai = None
 
 # ==============================================================================
-# MÓDULO 2: GENERACIÓN DE REPORTES PDF (CORREGIDO)
+# MÓDULO 2: GENERACIÓN DE REPORTES PDF (Sin cambios)
 # ==============================================================================
 def clean_html_for_reportlab(text):
-    """
-    [NUEVA FUNCIÓN] Convierte Markdown simple a un formato HTML compatible con
-    ReportLab y limpia etiquetas para evitar errores de parsing.
-    """
-    # Convertir Markdown de negrita (**) a etiquetas <b>
     text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
-    # Convertir ### Headers a negrita
     text = re.sub(r'###\s?(.*)', r'<b>\1</b>', text)
-    # Convertir saltos de línea a <br/>
     text = text.replace('\n', '<br/>')
     return text
 
 def create_patient_report_pdf(patient_info, history_df):
-    """Genera el reporte PDF de un paciente con su historial."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=(8.5 * inch, 11 * inch))
     styles = getSampleStyleSheet()
@@ -171,23 +167,19 @@ def create_patient_report_pdf(patient_info, history_df):
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1 * inch))
             story.append(Paragraph("<b>--- Análisis por IA (SaludIA) ---</b>", styles['Normal']))
-            
             raw_text = str(row['ai_analysis'])
             analysis_text = clean_html_for_reportlab(raw_text)
-            
             try:
                 story.append(Paragraph(analysis_text, styles['Normal']))
             except Exception as e:
                 story.append(Paragraph(f"Error al renderizar análisis: {e}", styles['Normal']))
-
         story.append(Spacer(1, 0.25 * inch))
-        
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 # ==============================================================================
-# MÓDULO 3: VISTAS Y COMPONENTES DE UI
+# MÓDULO 3: VISTAS Y COMPONENTES DE UI (Sin cambios lógicos)
 # ==============================================================================
 def render_login_page():
     st.markdown("<h1 style='text-align: center; color: var(--primary-color);'>🤖 SaludIA</h1>", unsafe_allow_html=True)
@@ -315,10 +307,8 @@ def render_patient_dashboard():
         render_new_consultation_form(patient_id)
 
 def render_new_consultation_form(patient_id):
-    """Renderiza el formulario de nueva consulta con campos detallados."""
     with st.form("new_consultation_form"):
         st.header("Datos de la Consulta")
-        
         with st.expander("1. Anamnesis y Vitales", expanded=True):
             motivo = st.text_area("Motivo de Consulta y Notas")
             cols = st.columns(5)
@@ -339,19 +329,7 @@ def render_new_consultation_form(patient_id):
             ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
 
         if st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary"):
-            data = {
-                "motivo_consulta": motivo, 
-                "presion_sistolica": sistolica, 
-                "presion_diastolica": diastolica, 
-                "frec_cardiaca": frec_cardiaca, 
-                "glucemia": glucemia, 
-                "imc": imc,
-                "sintomas_cardio": sintomas_cardio,
-                "sintomas_resp": sintomas_resp,
-                "sintomas_metabolico": sintomas_metabolico,
-                "dieta": dieta,
-                "ejercicio": ejercicio
-            }
+            data = {"motivo_consulta": motivo, "presion_sistolica": sistolica, "presion_diastolica": diastolica, "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc, "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico, "dieta": dieta, "ejercicio": ejercicio}
             firebase_utils.save_consultation(st.session_state.physician_email, patient_id, data)
             st.rerun()
 
