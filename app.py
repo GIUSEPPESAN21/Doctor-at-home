@@ -1,63 +1,45 @@
 # -*- coding: utf-8 -*-
 """
-Suite de Diagnóstico Integral
-Versión: 21.2 ("Robust AI Connection")
-Descripción: Versión final que soluciona el error de conexión implementando 
-una lista de modelos de IA actualizada, configuraciones de seguridad para 
-contenido médico y parámetros de generación optimizados para mayor fiabilidad.
+Suite de Diagnóstico Integral - Aplicación Principal
+Versión: 22.0 ("Modular Architecture")
+Descripción: Versión refactorizada que separa la lógica de Firebase y Gemini AI
+en módulos independientes para mejorar la mantenibilidad y escalabilidad.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
 import pandas as pd
-from datetime import datetime, timezone
-import firebase_admin
-from firebase_admin import credentials, firestore, auth
-import google.generativeai as genai
+from firebase_admin import auth
 from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 
+# --- MÓDULOS PERSONALIZADOS ---
+import firebase_utils
+from gemini_utils import GeminiUtils
+
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Suite Clínica Definitiva",
+    page_title="Suite Clínica Modular",
     page_icon="🩺",
     layout="wide"
 )
 
 # ==============================================================================
-# MÓDULO 1: CONEXIONES Y GESTIÓN DE ESTADO
+# MÓDULO 1: CONEXIONES Y ESTADO
 # ==============================================================================
-@st.cache_resource
-def init_connections():
-    # Conexión a Firebase
-    try:
-        creds_dict = dict(st.secrets["firebase_credentials"])
-        creds_dict['private_key'] = creds_dict['private_key'].replace('\\n', '\n')
-        if not firebase_admin._apps:
-            creds = credentials.Certificate(creds_dict)
-            firebase_admin.initialize_app(creds)
-        db_client = firestore.client()
-    except Exception as e:
-        st.error(f"Error crítico al conectar con Firebase: {e}", icon="🔥")
-        db_client = None
 
-    # Configuración de la API de IA
-    try:
-        if "gemini_api_key" not in st.secrets:
-            st.error("Error de configuración: 'gemini_api_key' no encontrada en los secretos.", icon="🔑")
-            model_configured = False
-        else:
-            api_key = st.secrets["gemini_api_key"]
-            genai.configure(api_key=api_key)
-            model_configured = True
-    except Exception as e:
-        st.error(f"Error crítico al configurar la API de IA: {e}", icon="🤖")
-        model_configured = False
-        
-    return db_client, model_configured
+# Inicializa Firebase a través del módulo de utilidades
+DB = firebase_utils.DB
 
-DB, IS_MODEL_CONFIGURED = init_connections()
+# Inicializa Gemini AI. Maneja el error si la API key no está configurada.
+try:
+    GEMINI = GeminiUtils()
+    IS_MODEL_CONFIGURED = True
+except (ValueError, Exception) as e:
+    st.error(e, icon="🔑")
+    GEMINI = None
+    IS_MODEL_CONFIGURED = False
 
 # --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
 if 'logged_in' not in st.session_state:
@@ -69,144 +51,12 @@ if 'logged_in' not in st.session_state:
     st.session_state.last_clicked_ai = None
 
 # ==============================================================================
-# MÓDULO 2: LÓGICA DE DATOS (FIRESTORE)
-# ==============================================================================
-def get_physician_patients(physician_email):
-    if not DB: return []
-    patients_ref = DB.collection('physicians').document(physician_email).collection('patients').stream()
-    return [{'id': doc.id, **doc.to_dict()} for doc in patients_ref]
-
-def save_new_patient(physician_email, patient_data):
-    if not DB: return
-    DB.collection('physicians').document(physician_email).collection('patients').document(patient_data['cedula']).set(patient_data)
-    st.success(f"Paciente {patient_data['nombre']} registrado exitosamente.")
-
-def save_consultation(physician_email, patient_id, consultation_data):
-    if not DB: return None
-    timestamp = datetime.now(timezone.utc)
-    doc_id = timestamp.strftime('%Y-%m-%d_%H-%M-%S')
-    consultation_data['timestamp_utc'] = timestamp.isoformat()
-    clean_data = {k: v for k, v in consultation_data.items() if v is not None and v != ''}
-    DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(doc_id).set(clean_data)
-    st.toast("Consulta guardada.", icon="✅")
-    return doc_id
-
-def update_consultation_with_ai_analysis(physician_email, patient_id, consultation_id, ai_report):
-    if not DB: return
-    consultation_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').document(consultation_id)
-    consultation_ref.update({"ai_analysis": ai_report})
-    st.toast("Análisis de IA guardado en el historial.", icon="🧠")
-
-def load_patient_history(physician_email, patient_id):
-    if not DB: return pd.DataFrame()
-    consultations_ref = DB.collection('physicians').document(physician_email).collection('patients').document(patient_id).collection('consultations').order_by('timestamp_utc', direction=firestore.Query.DESCENDING).stream()
-    records = []
-    for doc in consultations_ref:
-        record = doc.to_dict()
-        record['id'] = doc.id
-        records.append(record)
-    if not records: return pd.DataFrame()
-    df = pd.DataFrame(records)
-    df['timestamp'] = pd.to_datetime(df['timestamp_utc'])
-    return df
-
-# ==============================================================================
-# MÓDULO 3: INTELIGENCIA ARTIFICIAL (GEMINI) - [CORREGIDO V2]
-# ==============================================================================
-@st.cache_data(show_spinner="Generando análisis y recomendaciones con IA...", ttl=300)
-def generate_ai_holistic_review(_patient_info, _latest_consultation, _history_summary):
-    if not IS_MODEL_CONFIGURED:
-        return "Error de configuración: La `gemini_api_key` no se encontró en los secretos de Streamlit. Por favor, configúrela para poder continuar."
-    
-    # [CORREGIDO V2] Configuración de generación optimizada para análisis clínico
-    generation_config = {
-        "temperature": 0.3,
-        "top_p": 0.95,
-        "top_k": 40,
-        "max_output_tokens": 4096,
-    }
-
-    # [CORREGIDO V2] Configuración de seguridad menos restrictiva para contenido médico
-    safety_settings = [
-        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_ONLY_HIGH"},
-        {"category": "HARM_CATEGORY_HATE_SPEECH", "threshold": "BLOCK_ONLY_HIGH"},
-        {"category": "HARM_CATEGORY_SEXUALLY_EXPLICIT", "threshold": "BLOCK_ONLY_HIGH"},
-        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_ONLY_HIGH"},
-    ]
-    
-    # [CORREGIDO V2] Lista de modelos actualizada en orden de preferencia
-    model_list = [
-        "gemini-2.0-flash-exp",
-        "gemini-1.5-pro-001",
-        "gemini-1.5-flash-001",
-        "gemini-1.5-flash",
-    ]
-
-    prompt = f"""
-    **ROL Y OBJETIVO:** Eres un médico especialista en medicina interna y cardiología. Tu objetivo es actuar como un co-piloto para otro médico, analizando los datos de un paciente para generar un reporte clínico estructurado, profesional y accionable.
-
-    **CONTEXTO DEL PACIENTE:**
-    - Nombre: {str(_patient_info.get('nombre', 'No especificado'))}
-    - Edad: {str(_patient_info.get('edad', 'No especificada'))} años
-    
-    **DATOS DE LA CONSULTA ACTUAL:**
-    - Motivo: {str(_latest_consultation.get('motivo_consulta', 'No especificado'))}
-    - Signos Vitales: PA {str(_latest_consultation.get('presion_sistolica', 'N/A'))}/{str(_latest_consultation.get('presion_diastolica', 'N/A'))} mmHg, Glucemia {str(_latest_consultation.get('glucemia', 'N/A'))} mg/dL, IMC {str(_latest_consultation.get('imc', 'N/A'))} kg/m².
-    - Síntomas Relevantes: Cardiovascular({str(_latest_consultation.get('sintomas_cardio', []))}), Respiratorio({str(_latest_consultation.get('sintomas_resp', []))}), Metabólico({str(_latest_consultation.get('sintomas_metabolico', []))})
-
-    **RESUMEN DEL HISTORIAL PREVIO:**
-    {_history_summary}
-
-    **TAREA: Genera el reporte usando estrictamente el siguiente formato Markdown:**
-
-    ### Análisis Clínico Integral por IA
-    **1. RESUMEN DEL CASO:**
-    (Presenta un resumen conciso del paciente, su edad, y el motivo de la consulta actual en el contexto de su historial.)
-    **2. IMPRESIÓN DIAGNÓSTICA Y DIFERENCIALES:**
-    (Basado en la constelación de signos, síntomas y factores de riesgo, ¿cuál es el diagnóstico más probable? Menciona 2 o 3 diagnósticos diferenciales.)
-    **3. ESTRATIFICACIÓN DEL RIESGO:**
-    (Evalúa el riesgo cardiovascular y/o metabólico global del paciente. Clasifícalo como BAJO, MODERADO, ALTO o MUY ALTO y justifica.)
-    **4. PLAN DE MANEJO SUGERIDO:**
-    - **Estudios Diagnósticos:** (Lista de exámenes necesarios.)
-    - **Tratamiento No Farmacológico:** (Recomendaciones clave sobre estilo de vida.)
-    - **Tratamiento Farmacológico:** (Sugiere clases de medicamentos.)
-    - **Metas Terapéuticas:** (Establece objetivos numéricos claros.)
-    **5. PUNTOS CLAVE PARA EDUCACIÓN DEL PACiente:**
-    (Proporciona 3-4 puntos en lenguaje sencillo.)
-    """
-    
-    for model_name in model_list:
-        try:
-            model_client = genai.GenerativeModel(
-                model_name=model_name,
-                generation_config=generation_config,
-                safety_settings=safety_settings
-            )
-            response = model_client.generate_content(prompt)
-            st.success(f"Análisis generado con el modelo: {model_name}", icon="🤖")
-            return response.text
-        except Exception as e:
-            print(f"ADVERTENCIA: El modelo '{model_name}' falló con el error: {e}. Probando el siguiente.")
-            continue
-            
-    # [CORREGIDO V2] Mensaje de error más detallado si todos los modelos fallan.
-    return """
-    **Error: No se pudo conectar con ningún modelo de IA disponible.**
-
-    **Posibles Causas:**
-    1.  **API Key Inválida:** Verifique que su `gemini_api_key` en los secretos de Streamlit sea correcta y esté activa.
-    2.  **Problemas de Red:** Asegúrese de que la aplicación tenga conexión a los servicios de Google AI.
-    3.  **Servicio No Disponible:** Es posible que los servicios de Google AI estén experimentando una interrupción temporal.
-
-    Por favor, revise su configuración y vuelva a intentarlo más tarde.
-    """
-
-# ==============================================================================
-# MÓDULO 4: GENERACIÓN DE REPORTES PDF (CON REPORTLAB)
+# MÓDULO 2: GENERACIÓN DE REPORTES PDF
 # ==============================================================================
 def create_patient_report_pdf(patient_info, history_df):
+    """Genera un reporte PDF con el historial completo del paciente."""
     buffer = BytesIO()
-    doc = SimpleDocTemplate(buffer)
+    doc = SimpleDocTemplate(buffer, pagesize=(8.5 * inch, 11 * inch))
     styles = getSampleStyleSheet()
     story = []
 
@@ -214,7 +64,7 @@ def create_patient_report_pdf(patient_info, history_df):
     story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
     story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
     story.append(Paragraph(f"Dirección: {patient_info.get('direccion', 'N/A')}", styles['Normal']))
-    story.append(Spacer(1, 0.25*inch))
+    story.append(Spacer(1, 0.25 * inch))
 
     for _, row in history_df.sort_values('timestamp').iterrows():
         story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
@@ -227,20 +77,21 @@ def create_patient_report_pdf(patient_info, history_df):
         vitales = f"<b>PA:</b> {pa_s}/{pa_d} mmHg | <b>Glucemia:</b> {gluc} mg/dL | <b>IMC:</b> {imc}"
         story.append(Paragraph(vitales, styles['Normal']))
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-            story.append(Spacer(1, 0.1*inch))
+            story.append(Spacer(1, 0.1 * inch))
             story.append(Paragraph("<b>--- Análisis por IA ---</b>", styles['h3']))
-            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('*', '- ')
+            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('**', '<b>').replace('**', '</b>')
             story.append(Paragraph(analysis_text, styles['Normal']))
-        story.append(Spacer(1, 0.25*inch))
+        story.append(Spacer(1, 0.25 * inch))
     
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 # ==============================================================================
-# MÓDULO 5: VISTAS Y COMPONENTES DE UI
+# MÓDULO 3: VISTAS Y COMPONENTES DE UI
 # ==============================================================================
 def render_login_page():
+    """Muestra el formulario de inicio de sesión y registro."""
     st.title("Plataforma de Gestión Clínica")
     
     with st.container(border=True):
@@ -253,6 +104,7 @@ def render_login_page():
       if login_button:
           try:
               user = auth.get_user_by_email(email)
+              # Aquí iría la lógica de verificación de contraseña (no incluida en firebase-admin)
               st.session_state.logged_in = True
               st.session_state.physician_email = user.email
               st.session_state.page = 'control_panel'
@@ -265,6 +117,7 @@ def render_login_page():
           except Exception as e: st.error(f"Error de registro: {e}")
 
 def render_main_app():
+    """Renderiza la aplicación principal una vez que el usuario ha iniciado sesión."""
     with st.sidebar:
         st.header("Menú del Médico")
         st.write(st.session_state.get('physician_email', 'Cargando...'))
@@ -275,7 +128,8 @@ def render_main_app():
             st.rerun()
         st.divider()
         if st.button("Cerrar Sesión", use_container_width=True):
-            st.session_state.logged_in = False
+            for key in list(st.session_state.keys()):
+                del st.session_state[key]
             st.rerun()
         
     if st.session_state.page == 'control_panel':
@@ -284,6 +138,7 @@ def render_main_app():
         render_patient_dashboard()
 
 def render_control_panel():
+    """Muestra el panel para registrar y seleccionar pacientes."""
     st.title("Panel de Control Médico")
 
     tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
@@ -299,121 +154,120 @@ def render_control_panel():
             telefono = st.text_input("Teléfono")
             submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
             if submitted and nombre and cedula:
-                save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
+                firebase_utils.save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
                 st.rerun()
         
         st.divider()
         st.header("Seleccionar Paciente Existente")
-        patients = get_physician_patients(st.session_state.physician_email)
+        patients = firebase_utils.get_physician_patients(st.session_state.physician_email)
         if not patients:
             st.info("No hay pacientes registrados. Agregue uno nuevo para comenzar.")
         else:
             for patient in patients:
-                col1, col2, col3 = st.columns([3, 2, 1])
-                col1.subheader(patient['nombre'])
-                col2.text(f"ID: {patient['cedula']}")
-                if col3.button("Ver Historial", key=patient['id'], use_container_width=True):
-                    st.session_state.selected_patient_id = patient['id']
-                    st.session_state.page = 'patient_dashboard'
-                    st.rerun()
+                with st.container(border=True):
+                    col1, col2 = st.columns([3, 1])
+                    col1.subheader(patient['nombre'])
+                    col1.caption(f"ID: {patient['cedula']}")
+                    if col2.button("Ver Historial", key=patient['id'], use_container_width=True, type="primary"):
+                        st.session_state.selected_patient_id = patient['id']
+                        st.session_state.page = 'patient_dashboard'
+                        st.rerun()
 
     with tab2:
         st.markdown("### Acerca de esta Herramienta")
-        st.markdown(
-            "Esta es una suite de software diseñada para asistir a profesionales de la salud en el "
-            "seguimiento y análisis de pacientes. Utiliza inteligencia artificial para generar "
-            "recomendaciones y reportes clínicos, optimizando el flujo de trabajo."
-        )
+        st.markdown("Esta suite de software modular asiste a profesionales de la salud en el seguimiento y análisis de pacientes, utilizando inteligencia artificial para generar recomendaciones y optimizar el flujo de trabajo.")
         st.divider()
-        st.markdown("##### Autor")
-        st.write("**Joseph Javier Sánchez Acuña**")
-        st.write("_Ingeniero Industrial, Experto en Inteligencia Artificial y Desarrollo de Software._")
-        st.markdown("---")
-        st.markdown("##### Contacto")
-        st.write("🔗 [Perfil de LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275)")
-        st.write("📂 [Repositorio en GitHub](https://github.com/GIUSEPPESAN21)")
-        st.write("📧 joseph.sanchez@uniminuto.edu.co")
+        st.write("**Autor:** Joseph Javier Sánchez Acuña")
+        st.write("_Ingeniero Industrial, Experto en IA y Desarrollo de Software._")
+        st.write("🔗 [LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275) | 📂 [GitHub](https://github.com/GIUSEPPESAN21)")
 
 def render_patient_dashboard():
+    """Muestra el historial y el formulario de nueva consulta para un paciente seleccionado."""
     patient_id = st.session_state.selected_patient_id
-    patient_info = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id).get().to_dict()
+    patient_info_ref = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id)
+    patient_info = patient_info_ref.get().to_dict() if patient_info_ref.get().exists else {}
+
     st.title(f"Dashboard Clínico de: {patient_info.get('nombre', 'N/A')}")
     st.caption(f"Documento: {patient_info.get('cedula', 'N/A')} | Edad: {patient_info.get('edad', 'N/A')} años")
     
-    df_history = load_patient_history(st.session_state.physician_email, patient_id)
+    df_history = firebase_utils.load_patient_history(st.session_state.physician_email, patient_id)
 
     if not df_history.empty:
         pdf_data = create_patient_report_pdf(patient_info, df_history)
-        st.download_button(
-            label="📄 Descargar Reporte Completo en PDF",
-            data=pdf_data,
-            file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf",
-            mime="application/pdf",
-        )
+        st.download_button("📄 Descargar Reporte Completo en PDF", data=pdf_data, file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf", mime="application/pdf")
 
     tab1, tab2 = st.tabs(["📈 Historial de Consultas", "✍️ Registrar Nueva Consulta"])
 
     with tab1:
         if df_history.empty:
-            st.info("Este paciente no tiene consultas.")
+            st.info("Este paciente aún no tiene consultas registradas.")
         else:
+            # Lógica para procesar la solicitud de análisis de IA
             if st.session_state.ai_analysis_running:
-                consultation_id_to_process = st.session_state.last_clicked_ai
-                row_to_process = df_history[df_history['id'] == consultation_id_to_process].iloc[0]
-                history_summary = "..."
-                with st.spinner("Contactando al asistente de IA..."):
-                    ai_report = generate_ai_holistic_review(patient_info, row_to_process.to_dict(), history_summary)
-                    update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id_to_process, ai_report)
+                consultation_id = st.session_state.last_clicked_ai
+                row = df_history[df_history['id'] == consultation_id].iloc[0]
+                history_summary = "Resumen del historial médico previo relevante del paciente." # Placeholder
+                
+                ai_report = GEMINI.generate_ai_holistic_review(patient_info, row.to_dict(), history_summary)
+                firebase_utils.update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id, ai_report)
+                
                 st.session_state.ai_analysis_running = False
                 st.session_state.last_clicked_ai = None
                 st.rerun()
 
+            # Muestra cada consulta en un expander
             for _, row in df_history.iterrows():
                 with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
                     st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
                     if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
+                        st.markdown("---")
                         st.markdown(row['ai_analysis'])
                     else:
-                        button_key = f"ai_{row['id']}"
-                        if st.button("Generar Análisis con IA", key=button_key, disabled=st.session_state.ai_analysis_running):
+                        if st.button("Generar Análisis con IA", key=f"ai_{row['id']}", disabled=st.session_state.ai_analysis_running or not IS_MODEL_CONFIGURED):
                             st.session_state.ai_analysis_running = True
                             st.session_state.last_clicked_ai = row['id']
                             st.rerun()
 
     with tab2:
-        with st.form("new_consultation_form"):
-            st.header("Datos de la Consulta")
-            with st.expander("1. Anamnesis y Vitales", expanded=True):
-                motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
-                c1, c2, c3, c4, c5 = st.columns(5)
-                presion_sistolica = c1.number_input("PA Sistólica", min_value=0)
-                presion_diastolica = c2.number_input("PA Diastólica", min_value=0)
-                frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0)
-                glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0)
-                imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f")
-            with st.expander("2. Revisión por Sistemas (Síntomas)"):
-                sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
-                sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
-                sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
-            with st.expander("3. Factores de Riesgo y Estilo de Vida"):
-                c1, c2 = st.columns(2)
-                dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
-                ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
-            submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
-            if submitted:
-                consultation_data = {
-                    "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
-                    "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc,
-                    "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
-                    "dieta": dieta, "ejercicio": ejercicio
-                }
-                save_consultation(st.session_state.physician_email, patient_id, consultation_data)
-                st.rerun()
+        render_new_consultation_form(patient_id)
+
+def render_new_consultation_form(patient_id):
+    """Muestra el formulario para registrar una nueva consulta."""
+    with st.form("new_consultation_form"):
+        st.header("Datos de la Consulta")
+        with st.expander("1. Anamnesis y Vitales", expanded=True):
+            motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            presion_sistolica = c1.number_input("PA Sistólica", min_value=0, value=120)
+            presion_diastolica = c2.number_input("PA Diastólica", min_value=0, value=80)
+            frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0, value=70)
+            glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0, value=95)
+            imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f", value=24.5)
+        with st.expander("2. Revisión por Sistemas (Síntomas)"):
+            sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
+            sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
+            sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
+        with st.expander("3. Factores de Riesgo y Estilo de Vida"):
+            c1, c2 = st.columns(2)
+            dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
+            ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
+        
+        submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
+        if submitted:
+            consultation_data = {
+                "motivo_consulta": motivo_consulta, "presion_sistolica": presion_sistolica, "presion_diastolica": presion_diastolica,
+                "frec_cardiaca": frec_cardiaca, "glucemia": glucemia, "imc": imc,
+                "sintomas_cardio": sintomas_cardio, "sintomas_resp": sintomas_resp, "sintomas_metabolico": sintomas_metabolico,
+                "dieta": dieta, "ejercicio": ejercicio
+            }
+            firebase_utils.save_consultation(st.session_state.physician_email, patient_id, consultation_data)
+            st.rerun()
 
 # ==============================================================================
-# MÓDULO 6: CONTROLADOR PRINCIPAL
+# MÓDULO 4: CONTROLADOR PRINCIPAL
 # ==============================================================================
 def main():
+    """Controlador principal que decide qué página mostrar."""
     if st.session_state.get('logged_in', False):
         render_main_app()
     else:
@@ -421,4 +275,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
