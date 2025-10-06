@@ -1,11 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 24.0 ("SaludIA Rebrand & UI Polish")
-Descripción: Versión que introduce la nueva identidad de marca "SaludIA".
-Rediseña completamente la página de inicio de sesión con un layout centrado
-y pestañas para una mejor experiencia. Mejora la paleta de colores y los
-estilos visuales en toda la aplicación para una apariencia más moderna.
+Versión: 24.1 ("PDF Generation Fix")
+Descripción: Corrige un error crítico en la generación de PDFs que ocurría
+cuando el texto de la IA contenía formato Markdown. Se implementa una función
+de limpieza para convertir de forma segura el Markdown a un HTML compatible
+con ReportLab, evitando errores de parsing.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -15,6 +15,7 @@ from io import BytesIO
 from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
+import re # <--- [CORRECCIÓN] Importado para manejar el texto
 
 # --- MÓDulos PERSONALIZADOS ---
 import firebase_utils
@@ -133,9 +134,23 @@ if 'logged_in' not in st.session_state:
     st.session_state.last_clicked_ai = None
 
 # ==============================================================================
-# MÓDULO 2: GENERACIÓN DE REPORTES PDF (Sin cambios)
+# MÓDULO 2: GENERACIÓN DE REPORTES PDF (CORREGIDO)
 # ==============================================================================
+def clean_html_for_reportlab(text):
+    """
+    [NUEVA FUNCIÓN] Convierte Markdown simple a un formato HTML compatible con
+    ReportLab y limpia etiquetas para evitar errores de parsing.
+    """
+    # Convertir Markdown de negrita (**) a etiquetas <b>
+    text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', text)
+    # Convertir ### Headers a negrita
+    text = re.sub(r'###\s?(.*)', r'<b>\1</b>', text)
+    # Convertir saltos de línea a <br/>
+    text = text.replace('\n', '<br/>')
+    return text
+
 def create_patient_report_pdf(patient_info, history_df):
+    """Genera el reporte PDF de un paciente con su historial."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=(8.5 * inch, 11 * inch))
     styles = getSampleStyleSheet()
@@ -144,6 +159,7 @@ def create_patient_report_pdf(patient_info, history_df):
     story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
     story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
     story.append(Spacer(1, 0.25 * inch))
+
     for _, row in history_df.sort_values('timestamp').iterrows():
         story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
         motivo = str(row.get('motivo_consulta', 'N/A')).replace('\n', '<br/>')
@@ -151,18 +167,28 @@ def create_patient_report_pdf(patient_info, history_df):
         pa_s = str(row.get('presion_sistolica', 'N/A'))
         pa_d = str(row.get('presion_diastolica', 'N/A'))
         story.append(Paragraph(f"<b>Signos Vitales:</b> PA: {pa_s}/{pa_d} mmHg", styles['Normal']))
+        
         if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
             story.append(Spacer(1, 0.1 * inch))
-            story.append(Paragraph("<b>--- Análisis por IA (SaludIA) ---</b>", styles['h3']))
-            analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('**', '<b>').replace('**', '</b>')
-            story.append(Paragraph(analysis_text, styles['Normal']))
+            story.append(Paragraph("<b>--- Análisis por IA (SaludIA) ---</b>", styles['Normal']))
+            
+            # [CORRECCIÓN] Se utiliza la nueva función para limpiar el texto de la IA
+            raw_text = str(row['ai_analysis'])
+            analysis_text = clean_html_for_reportlab(raw_text)
+            
+            try:
+                story.append(Paragraph(analysis_text, styles['Normal']))
+            except Exception as e:
+                story.append(Paragraph(f"Error al renderizar análisis: {e}", styles['Normal']))
+
         story.append(Spacer(1, 0.25 * inch))
+        
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 # ==============================================================================
-# MÓDULO 3: VISTAS Y COMPONENTES DE UI (Actualizado)
+# MÓDULO 3: VISTAS Y COMPONENTES DE UI
 # ==============================================================================
 def render_login_page():
     st.markdown("<h1 style='text-align: center; color: var(--primary-color);'>🤖 SaludIA</h1>", unsafe_allow_html=True)
