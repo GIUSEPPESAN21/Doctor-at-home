@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 25.0 ("Clinical UI Refinement")
-Descripción: Renovación visual completa con una paleta de colores clínicos
-(azules y verdes), botones rediseñados con gradientes y sombras mejoradas,
-y animaciones más fluidas para una experiencia de usuario superior.
+Versión: 25.1 ("Cohesive Clinical Palette")
+Descripción: Refinamiento final de la interfaz de usuario. Se reemplaza el
+color rojo de los botones de acción por un verde azulado clínico para
+cohesión. Se mejora el estilo de las pestañas para que coincidan con la
+nueva paleta de colores, logrando una estética visual unificada.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -39,6 +40,7 @@ def apply_custom_styling():
             --primary-color: #0077b6; /* Azul clínico, profesional */
             --primary-hover: #023e8a;
             --success-color: #2a9d8f; /* Verde azulado para acciones positivas */
+            --success-hover: #248a7f;
             --background-color: #f4f7f9; /* Gris azulado muy claro */
             --text-color: #333333;
             --card-bg-color: #ffffff;
@@ -68,20 +70,20 @@ def apply_custom_styling():
             font-weight: 600;
             border: none;
             box-shadow: 0 2px 5px var(--shadow-color);
-            transition: transform 0.2s ease, box-shadow 0.2s ease;
+            transition: transform 0.2s ease, box-shadow 0.2s ease, background-color 0.2s ease;
         }
         div[data-testid="stButton"] > button:hover {
             transform: translateY(-3px);
             box-shadow: 0 6px 12px rgba(0, 0, 0, 0.15);
         }
         
-        /* Botones Primarios */
+        /* [CORRECCIÓN] Botones Primarios ahora usan el color de éxito */
         div[data-testid="stButton"] > button[kind="primary"] {
-            background-color: var(--primary-color);
+            background-color: var(--success-color);
             color: white;
         }
         div[data-testid="stButton"] > button[kind="primary"]:hover {
-            background-color: var(--primary-hover);
+            background-color: var(--success-hover);
         }
         
         /* Botones Secundarios */
@@ -95,7 +97,7 @@ def apply_custom_styling():
             border-color: var(--primary-color);
         }
         
-        /* --- Estilo de Contenedores y Tarjetas con Transición --- */
+        /* --- Estilo de Contenedores y Tarjetas --- */
         [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlockBorderWrapper"] {
             background-color: var(--card-bg-color);
             border-radius: 12px;
@@ -104,8 +106,17 @@ def apply_custom_styling():
             padding: 1.2em;
             transition: box-shadow 0.3s ease;
         }
-        [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlockBorderWrapper"]:hover {
-            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+        
+        /* --- Estilo de Pestañas (Tabs) Mejorado --- */
+        button[data-baseweb="tab"] {
+            border-radius: 8px 8px 0 0 !important;
+            transition: background-color 0.2s ease;
+        }
+        button[data-baseweb="tab"][aria-selected="true"] {
+            background-color: var(--card-bg-color) !important;
+            border-bottom: 3px solid var(--primary-color) !important;
+            color: var(--primary-color) !important;
+            font-weight: 600;
         }
         
         /* --- Estilo de Expanders --- */
