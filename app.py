@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 22.0 ("Modular Architecture")
-Descripción: Versión refactorizada que separa la lógica de Firebase y Gemini AI
-en módulos independientes para mejorar la mantenibilidad y escalabilidad.
+Versión: 23.0 ("Modern UI/UX")
+Descripción: Versión con una interfaz de usuario rediseñada. Elimina el panel
+lateral en favor de una navegación superior, introduce CSS personalizado para
+mejorar colores, botones y contenedores, y añade animaciones sutiles para
+una experiencia de usuario más moderna y fluida.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -14,25 +16,105 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 
-# --- MÓDULOS PERSONALIZADOS ---
+# --- MÓDulos PERSONALIZADOS ---
 import firebase_utils
 from gemini_utils import GeminiUtils
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
-    page_title="Suite Clínica Modular",
+    page_title="Suite Clínica Moderna",
     page_icon="🩺",
     layout="wide"
 )
 
 # ==============================================================================
-# MÓDULO 1: CONEXIONES Y ESTADO
+# MÓDULO 1: ESTILOS Y CONFIGURACIÓN INICIAL
 # ==============================================================================
+def apply_custom_styling():
+    """Inyecta CSS personalizado para una interfaz de usuario mejorada."""
+    custom_css = """
+    <style>
+        /* --- Paleta de Colores y Variables --- */
+        :root {
+            --primary-color: #0d6efd; /* Azul profesional y moderno */
+            --primary-hover: #0a58ca;
+            --secondary-color: #e9ecef; /* Un gris claro para acentos */
+            --background-color: #f8f9fa; /* Fondo ligeramente gris */
+            --text-color: #212529;
+            --card-bg-color: #ffffff;
+            --border-color: #dee2e6;
+            --shadow-color: rgba(0, 0, 0, 0.075);
+        }
 
-# Inicializa Firebase a través del módulo de utilidades
+        /* --- Estilo General del Body --- */
+        .stApp {
+            background-color: var(--background-color);
+            color: var(--text-color);
+        }
+        
+        /* --- Animación de Entrada --- */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(15px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .main > div {
+            animation: fadeIn 0.6s ease-out;
+        }
+
+        /* --- Estilo de Botones Personalizado --- */
+        div[data-testid="stButton"] > button {
+            border-radius: 0.5rem; /* Bordes redondeados */
+            padding: 0.6em 1.2em;
+            font-weight: 600;
+            transition: all 0.25s ease-in-out;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+            border: 1px solid var(--primary-color);
+        }
+        div[data-testid="stButton"] > button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 12px rgba(0,0,0,0.1);
+        }
+        
+        /* Botones Primarios (Guardar, Registrar, etc.) */
+        div[data-testid="stButton"] > button[kind="primary"] {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        div[data-testid="stButton"] > button[kind="primary"]:hover {
+            background-color: var(--primary-hover);
+            border-color: var(--primary-hover);
+        }
+        
+        /* Botones Secundarios (Cerrar Sesión, etc.) */
+        div[data-testid="stButton"] > button[kind="secondary"] {
+            background-color: var(--card-bg-color);
+            color: var(--primary-color);
+        }
+         div[data-testid="stButton"] > button[kind="secondary"]:hover {
+            background-color: #eef5ff; /* Un azul muy claro al pasar el mouse */
+        }
+        
+        /* --- Estilo de Contenedores y Tarjetas --- */
+        [data-testid="stVerticalBlock"] [data-testid="stVerticalBlock"] [data-testid="stVerticalBlockBorderWrapper"] {
+            background-color: var(--card-bg-color);
+            border-radius: 0.75rem;
+            border: 1px solid var(--border-color);
+            box-shadow: 0 4px 12px var(--shadow-color);
+            padding: 1em;
+        }
+        
+        /* --- Estilo de Expanders --- */
+        .st-emotion-cache-1h9usn1 { /* Cabecera del expander */
+            border-radius: 0.5rem;
+            border: 1px solid var(--border-color);
+            background-color: #f7faff;
+        }
+    </style>
+    """
+    st.markdown(custom_css, unsafe_allow_html=True)
+
+# Inicializa Firebase y Gemini
 DB = firebase_utils.DB
-
-# Inicializa Gemini AI. Maneja el error si la API key no está configurada.
 try:
     GEMINI = GeminiUtils()
     IS_MODEL_CONFIGURED = True
@@ -41,7 +123,7 @@ except (ValueError, Exception) as e:
     GEMINI = None
     IS_MODEL_CONFIGURED = False
 
-# --- INICIALIZACIÓN DEL ESTADO DE LA SESIÓN ---
+# Inicialización del estado de la sesión
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
     st.session_state.physician_email = None
@@ -51,21 +133,18 @@ if 'logged_in' not in st.session_state:
     st.session_state.last_clicked_ai = None
 
 # ==============================================================================
-# MÓDULO 2: GENERACIÓN DE REPORTES PDF
+# MÓDULO 2: GENERACIÓN DE REPORTES PDF (Sin cambios)
 # ==============================================================================
 def create_patient_report_pdf(patient_info, history_df):
-    """Genera un reporte PDF con el historial completo del paciente."""
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=(8.5 * inch, 11 * inch))
     styles = getSampleStyleSheet()
     story = []
-
     story.append(Paragraph(str(patient_info.get('nombre', 'N/A')), styles['h1']))
     story.append(Paragraph(f"Documento: {patient_info.get('cedula', 'N/A')}", styles['Normal']))
     story.append(Paragraph(f"Edad: {patient_info.get('edad', 'N/A')} años", styles['Normal']))
     story.append(Paragraph(f"Dirección: {patient_info.get('direccion', 'N/A')}", styles['Normal']))
     story.append(Spacer(1, 0.25 * inch))
-
     for _, row in history_df.sort_values('timestamp').iterrows():
         story.append(Paragraph(f"Consulta del {row['timestamp'].strftime('%d de %B, %Y')}", styles['h2']))
         motivo = str(row.get('motivo_consulta', 'N/A')).replace('\n', '<br/>')
@@ -82,17 +161,17 @@ def create_patient_report_pdf(patient_info, history_df):
             analysis_text = str(row['ai_analysis']).replace('\n', '<br/>').replace('**', '<b>').replace('**', '</b>')
             story.append(Paragraph(analysis_text, styles['Normal']))
         story.append(Spacer(1, 0.25 * inch))
-    
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
 
 # ==============================================================================
-# MÓDULO 3: VISTAS Y COMPONENTES DE UI
+# MÓDULO 3: VISTAS Y COMPONENTES DE UI (Actualizado)
 # ==============================================================================
 def render_login_page():
-    """Muestra el formulario de inicio de sesión y registro."""
     st.title("Plataforma de Gestión Clínica")
+    st.text("Una herramienta moderna para el seguimiento y análisis de pacientes.")
+    st.markdown("---")
     
     with st.container(border=True):
       with st.form("login_form"):
@@ -104,7 +183,6 @@ def render_login_page():
       if login_button:
           try:
               user = auth.get_user_by_email(email)
-              # Aquí iría la lógica de verificación de contraseña (no incluida en firebase-admin)
               st.session_state.logged_in = True
               st.session_state.physician_email = user.email
               st.session_state.page = 'control_panel'
@@ -116,33 +194,37 @@ def render_login_page():
               st.success(f"Médico {user.email} registrado. Por favor, inicie sesión.")
           except Exception as e: st.error(f"Error de registro: {e}")
 
+def render_header():
+    """Renderiza la nueva barra de navegación superior."""
+    with st.container(border=True):
+        col1, col2, col3 = st.columns([4, 1.5, 1.5])
+        with col1:
+            st.markdown(f"##### 👨‍⚕️ **Médico:** {st.session_state.get('physician_email', 'Cargando...')}")
+        with col2:
+            if st.button("Panel de Control", use_container_width=True):
+                st.session_state.page = 'control_panel'
+                st.session_state.selected_patient_id = None
+                st.rerun()
+        with col3:
+            if st.button("Cerrar Sesión", use_container_width=True, type="secondary"):
+                for key in list(st.session_state.keys()):
+                    del st.session_state[key]
+                st.rerun()
+    st.markdown("<br>", unsafe_allow_html=True)
+
+
 def render_main_app():
-    """Renderiza la aplicación principal una vez que el usuario ha iniciado sesión."""
-    with st.sidebar:
-        st.header("Menú del Médico")
-        st.write(st.session_state.get('physician_email', 'Cargando...'))
-        st.divider()
-        if st.button("Panel de Control", use_container_width=True):
-            st.session_state.page = 'control_panel'
-            st.session_state.selected_patient_id = None
-            st.rerun()
-        st.divider()
-        if st.button("Cerrar Sesión", use_container_width=True):
-            for key in list(st.session_state.keys()):
-                del st.session_state[key]
-            st.rerun()
-        
+    """Renderiza la aplicación principal, incluyendo la nueva cabecera."""
+    render_header()
     if st.session_state.page == 'control_panel':
         render_control_panel()
     elif st.session_state.page == 'patient_dashboard':
         render_patient_dashboard()
 
 def render_control_panel():
-    """Muestra el panel para registrar y seleccionar pacientes."""
     st.title("Panel de Control Médico")
 
     tab1, tab2 = st.tabs(["✍️ Gestión de Pacientes", "ℹ️ Acerca de"])
-
     with tab1:
         st.header("Registrar Nuevo Paciente")
         with st.form("new_patient_form", clear_on_submit=True):
@@ -152,7 +234,7 @@ def render_control_panel():
             edad = c3.number_input("Edad", min_value=0, max_value=120)
             direccion = st.text_input("Dirección de Residencia")
             telefono = st.text_input("Teléfono")
-            submitted = st.form_submit_button("Registrar Paciente", use_container_width=True)
+            submitted = st.form_submit_button("Registrar Paciente", use_container_width=True, type="primary")
             if submitted and nombre and cedula:
                 firebase_utils.save_new_patient(st.session_state.physician_email, {"nombre": nombre, "cedula": cedula, "edad": edad, "telefono": telefono, "direccion": direccion})
                 st.rerun()
@@ -166,13 +248,14 @@ def render_control_panel():
             for patient in patients:
                 with st.container(border=True):
                     col1, col2 = st.columns([3, 1])
-                    col1.subheader(patient['nombre'])
-                    col1.caption(f"ID: {patient['cedula']}")
-                    if col2.button("Ver Historial", key=patient['id'], use_container_width=True, type="primary"):
-                        st.session_state.selected_patient_id = patient['id']
-                        st.session_state.page = 'patient_dashboard'
-                        st.rerun()
-
+                    with col1:
+                        st.subheader(patient['nombre'])
+                        st.caption(f"ID: {patient['cedula']} | Edad: {patient.get('edad', 'N/A')} años")
+                    with col2:
+                        if st.button("Ver Historial", key=patient['id'], use_container_width=True, type="primary"):
+                            st.session_state.selected_patient_id = patient['id']
+                            st.session_state.page = 'patient_dashboard'
+                            st.rerun()
     with tab2:
         st.markdown("### Acerca de esta Herramienta")
         st.markdown("Esta suite de software modular asiste a profesionales de la salud en el seguimiento y análisis de pacientes, utilizando inteligencia artificial para generar recomendaciones y optimizar el flujo de trabajo.")
@@ -182,7 +265,6 @@ def render_control_panel():
         st.write("🔗 [LinkedIn](https://www.linkedin.com/in/joseph-javier-sánchez-acuña-150410275) | 📂 [GitHub](https://github.com/GIUSEPPESAN21)")
 
 def render_patient_dashboard():
-    """Muestra el historial y el formulario de nueva consulta para un paciente seleccionado."""
     patient_id = st.session_state.selected_patient_id
     patient_info_ref = DB.collection('physicians').document(st.session_state.physician_email).collection('patients').document(patient_id)
     patient_info = patient_info_ref.get().to_dict() if patient_info_ref.get().exists else {}
@@ -197,60 +279,52 @@ def render_patient_dashboard():
         st.download_button("📄 Descargar Reporte Completo en PDF", data=pdf_data, file_name=f"Reporte_{patient_info.get('cedula', 'N/A')}.pdf", mime="application/pdf")
 
     tab1, tab2 = st.tabs(["📈 Historial de Consultas", "✍️ Registrar Nueva Consulta"])
-
     with tab1:
         if df_history.empty:
             st.info("Este paciente aún no tiene consultas registradas.")
         else:
-            # Lógica para procesar la solicitud de análisis de IA
             if st.session_state.ai_analysis_running:
                 consultation_id = st.session_state.last_clicked_ai
                 row = df_history[df_history['id'] == consultation_id].iloc[0]
-                history_summary = "Resumen del historial médico previo relevante del paciente." # Placeholder
-                
+                history_summary = "Resumen del historial médico previo relevante del paciente."
                 ai_report = GEMINI.generate_ai_holistic_review(patient_info, row.to_dict(), history_summary)
                 firebase_utils.update_consultation_with_ai_analysis(st.session_state.physician_email, patient_id, consultation_id, ai_report)
-                
                 st.session_state.ai_analysis_running = False
                 st.session_state.last_clicked_ai = None
                 st.rerun()
 
-            # Muestra cada consulta en un expander
             for _, row in df_history.iterrows():
                 with st.expander(f"Consulta del {row['timestamp'].strftime('%d/%m/%Y %H:%M')}"):
                     st.write(f"**Motivo:** {row.get('motivo_consulta', 'N/A')}")
                     if 'ai_analysis' in row and pd.notna(row['ai_analysis']):
-                        st.markdown("---")
-                        st.markdown(row['ai_analysis'])
+                        st.markdown("---"); st.markdown(row['ai_analysis'])
                     else:
                         if st.button("Generar Análisis con IA", key=f"ai_{row['id']}", disabled=st.session_state.ai_analysis_running or not IS_MODEL_CONFIGURED):
                             st.session_state.ai_analysis_running = True
                             st.session_state.last_clicked_ai = row['id']
                             st.rerun()
-
     with tab2:
         render_new_consultation_form(patient_id)
 
 def render_new_consultation_form(patient_id):
-    """Muestra el formulario para registrar una nueva consulta."""
     with st.form("new_consultation_form"):
         st.header("Datos de la Consulta")
         with st.expander("1. Anamnesis y Vitales", expanded=True):
             motivo_consulta = st.text_area("Motivo de Consulta y Notas de Evolución")
-            c1, c2, c3, c4, c5 = st.columns(5)
-            presion_sistolica = c1.number_input("PA Sistólica", min_value=0, value=120)
-            presion_diastolica = c2.number_input("PA Diastólica", min_value=0, value=80)
-            frec_cardiaca = c3.number_input("Frec. Cardíaca", min_value=0, value=70)
-            glucemia = c4.number_input("Glucemia (mg/dL)", min_value=0, value=95)
-            imc = c5.number_input("IMC (kg/m²)", min_value=0.0, format="%.1f", value=24.5)
+            cols = st.columns(5)
+            presion_sistolica = cols[0].number_input("PA Sistólica", 0, value=120)
+            presion_diastolica = cols[1].number_input("PA Diastólica", 0, value=80)
+            frec_cardiaca = cols[2].number_input("Frec. Cardíaca", 0, value=70)
+            glucemia = cols[3].number_input("Glucemia (mg/dL)", 0, value=95)
+            imc = cols[4].number_input("IMC (kg/m²)", 0.0, format="%.1f", value=24.5)
         with st.expander("2. Revisión por Sistemas (Síntomas)"):
             sintomas_cardio = st.multiselect("Cardiovascular", ["Dolor de pecho", "Disnea", "Palpitaciones", "Edema"])
             sintomas_resp = st.multiselect("Respiratorio", ["Tos", "Expectoración", "Sibilancias"])
             sintomas_metabolico = st.multiselect("Metabólico", ["Polidipsia (mucha sed)", "Poliuria (mucha orina)", "Pérdida de peso"])
         with st.expander("3. Factores de Riesgo y Estilo de Vida"):
-            c1, c2 = st.columns(2)
-            dieta = c1.selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
-            ejercicio = c2.slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
+            cols = st.columns(2)
+            dieta = cols[0].selectbox("Calidad de la Dieta", ["Saludable (DASH/Mediterránea)", "Regular", "Poco saludable (Procesados)"])
+            ejercicio = cols[1].slider("Ejercicio Aeróbico (min/semana)", 0, 500, 150)
         
         submitted = st.form_submit_button("Guardar Consulta", use_container_width=True, type="primary")
         if submitted:
@@ -267,7 +341,8 @@ def render_new_consultation_form(patient_id):
 # MÓDULO 4: CONTROLADOR PRINCIPAL
 # ==============================================================================
 def main():
-    """Controlador principal que decide qué página mostrar."""
+    """Controlador principal que aplica estilos y decide qué página mostrar."""
+    apply_custom_styling()
     if st.session_state.get('logged_in', False):
         render_main_app()
     else:
@@ -275,3 +350,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
