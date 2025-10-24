@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 26.0 ("Final UI Polish & About Section Overhaul")
-Descripción: Refinamiento final de la interfaz con una paleta de colores
-más sofisticada y profesional. Se mejoran los títulos, tarjetas y se
-actualiza completamente la sección "Acerca de" con un nuevo diseño.
+Versión: 27.0 ("Visual Branding & Font Overhaul")
+Descripción: Mejora visual completa. Se integra el logo de la empresa
+SAVA en el login, cabecera y sección "Acerca de". Se reemplaza la
+fuente por defecto por "Poppins" para una estética más profesional.
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -16,16 +16,19 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib.units import inch
 import re 
 
-# --- MÓDulos PERSONALIZADOS ---
+# --- MÓdulos PERSONALIZADOS ---
 import firebase_utils
 from gemini_utils import GeminiUtils
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
     page_title="SaludIA: Asistente Clínico",
-    page_icon="🤖",
+    page_icon="https://github.com/GIUSEPPESAN21/sava-assets/blob/main/logo_sava.png?raw=true", # <-- Icono de pestaña actualizado
     layout="wide"
 )
+
+# --- CONSTANTES ---
+LOGO_URL = "https://github.com/GIUSEPPESAN21/sava-assets/blob/main/logo_sava.png?raw=true"
 
 # ==============================================================================
 # MÓDULO 1: ESTILOS Y CONFIGURACIÓN INICIAL
@@ -34,6 +37,9 @@ def apply_custom_styling():
     """Inyecta CSS personalizado para una interfaz de usuario mejorada."""
     custom_css = """
     <style>
+        /* --- NUEVO: Importar Fuente Profesional --- */
+        @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;600;700&display=swap');
+    
         /* --- Paleta de Colores Final y Refinada --- */
         :root {
             --primary-color: #1a73e8; /* Un azul corporativo más brillante */
@@ -51,6 +57,7 @@ def apply_custom_styling():
         .stApp {
             background-color: var(--background-color);
             color: var(--text-color);
+            font-family: 'Poppins', sans-serif; /* <-- FUENTE APLICADA */
         }
         
         /* --- Animación de Entrada --- */
@@ -65,6 +72,10 @@ def apply_custom_styling():
         /* --- Estilo de Títulos con Gradiente --- */
         h1, h2, h3 {
             color: var(--primary-color);
+            font-weight: 700; /* <-- Dar más peso a los títulos */
+        }
+        h4, h5, h6 {
+            font-weight: 600; /* <-- Dar más peso a los subtítulos */
         }
         
         /* --- Estilo de Botones --- */
@@ -185,7 +196,16 @@ def create_patient_report_pdf(patient_info, history_df):
 # MÓDULO 3: VISTAS Y COMPONENTES DE UI (Sección "Acerca de" actualizada)
 # ==============================================================================
 def render_login_page():
-    st.markdown("<h1 style='text-align: center; color: var(--primary-color);'>🤖 SaludIA</h1>", unsafe_allow_html=True)
+    # --- MODIFICADO: Logo Centrado con Markdown ---
+    st.markdown(
+        f"""
+        <div style="display: flex; justify-content: center; margin-bottom: 20px;">
+            <img src="{LOGO_URL}" alt="SAVA Logo" style="width: 250px;">
+        </div>
+        """, 
+        unsafe_allow_html=True
+    )
+    # st.markdown("<h1 style='text-align: center; color: var(--primary-color);'>🤖 SaludIA</h1>", unsafe_allow_html=True) # Reemplazado por logo
     st.markdown("<h4 style='text-align: center; color: var(--text-color);'>Tu Asistente Clínico Inteligente</h4>", unsafe_allow_html=True)
     st.markdown("---")
     
@@ -225,7 +245,18 @@ def render_header():
     with st.container(border=True):
         col1, col2, col3 = st.columns([4, 1.5, 1.5])
         with col1:
-            st.markdown(f"##### 👨‍⚕️ **Médico:** {st.session_state.get('physician_email', 'Cargando...')}")
+            # --- NUEVO: Logo y Email alineados ---
+            st.markdown(
+                f"""
+                <div style="display: flex; align-items: center; gap: 15px; height: 100%; min-height: 40px;">
+                    <img src="{LOGO_URL}" alt="SAVA Logo" style="height: 40px;">
+                    <span style="font-weight: 600; font-size: 1.1em; color: var(--text-color);">
+                        👨‍⚕️ {st.session_state.get('physician_email', 'Cargando...')}
+                    </span>
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
         with col2:
             if st.button("Panel de Control", use_container_width=True):
                 st.session_state.page = 'control_panel'; st.session_state.selected_patient_id = None; st.rerun()
@@ -273,13 +304,14 @@ def render_control_panel():
                         st.session_state.page = 'patient_dashboard'
                         st.rerun()
     
-    # [NUEVO] Sección "Acerca de" actualizada con tu información
+    # [MODIFICADO] Sección "Acerca de" actualizada con logo SAVA
     with tab2:
         st.header("👥 Sobre el Proyecto y su Creador")
         with st.container(border=True):
             col_img, col_info = st.columns([1, 3])
             with col_img:
-                st.image("https://placehold.co/250x250/1a73e8/FFFFFF?text=J.S.", caption="Joseph Javier Sánchez Acuña")
+                # --- MODIFICADO: Placeholder reemplazado por logo SAVA ---
+                st.image(LOGO_URL, caption="SAVA | Joseph Javier Sánchez Acuña")
             with col_info:
                 st.title("Joseph Javier Sánchez Acuña")
                 st.subheader("_Estudiante de Ingeniería Industrial_")
@@ -361,4 +393,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
