@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Suite de Diagnóstico Integral - Aplicación Principal
-Versión: 28.0 ("Vibrant Dark-Mode Palette & UI Tweaks")
-Descripción: Paleta de colores renovada a un índigo vibrante.
-Soporte completo para modo oscuro nativo de Streamlit.
-Logo movido al pie en login y título de CEO añadido en "Acerca de".
+Versión: 29.0 ("Brand Consistency & Style Polish")
+Descripción: Botones primarios (incluyendo "Ver Historial") ahora usan
+el color índigo principal. Logo de login más grande (250px).
+Estilo de "CEO de SAVA" mejorado en la sección "Acerca de".
 """
 # --- LIBRERÍAS ---
 import streamlit as st
@@ -44,7 +44,7 @@ def apply_custom_styling():
         :root {
             --primary-color: #4F46E5; /* Índigo vibrante */
             --primary-hover: #4338CA;
-            --success-color: #10B981; /* Esmeralda */
+            --success-color: #10B981; /* Esmeralda (Ahora para alertas, no botones) */
             --success-hover: #059669;
             /* Se eliminan: --background-color, --text-color, --card-bg-color, --border-color */
             /* Se deja que Streamlit maneje los fondos y texto para Light/Dark mode */
@@ -75,7 +75,7 @@ def apply_custom_styling():
             font-weight: 600;
         }
         
-        /* --- Estilo de Botones (Sin cambios, ya usan --primary-color) --- */
+        /* --- Estilo de Botones (MODIFICADO) --- */
         div[data-testid="stButton"] > button {
             border-radius: 8px;
             padding: 10px 18px;
@@ -88,13 +88,16 @@ def apply_custom_styling():
             transform: translateY(-2px);
             box-shadow: 0 4px 8px var(--shadow-color);
         }
+        
+        /* --- MODIFICADO: Botones primarios usan el color de marca (Índigo) --- */
         div[data-testid="stButton"] > button[kind="primary"] {
-            background-color: var(--success-color);
+            background-color: var(--primary-color);
             color: white;
         }
         div[data-testid="stButton"] > button[kind="primary"]:hover {
-            background-color: var(--success-hover);
+            background-color: var(--primary-hover);
         }
+        
         div[data-testid="stButton"] > button[kind="secondary"] {
             /* Usa variables de tema para compatibilidad dark/light */
             background-color: var(--secondary-background-color); 
@@ -230,11 +233,11 @@ def render_login_page():
                             except Exception as e: st.error(f"Error de registro: {e}")
                         else: st.error("Las contraseñas no coinciden.")
 
-    # --- MODIFICADO: Logo movido al final, más pequeño y sutil ---
+    # --- MODIFICADO: Logo más grande (250px) y más margen ---
     st.markdown(
         f"""
-        <div style="display: flex; justify-content: center; margin-top: 40px; opacity: 0.7;">
-            <img src="{LOGO_URL}" alt="SAVA Logo" style="width: 150px;">
+        <div style="display: flex; justify-content: center; margin-top: 60px; opacity: 0.7;">
+            <img src="{LOGO_URL}" alt="SAVA Logo" style="width: 250px;">
         </div>
         """, 
         unsafe_allow_html=True
@@ -298,6 +301,7 @@ def render_control_panel():
                     with col1:
                         st.subheader(patient['nombre'])
                         st.caption(f"ID: {patient['cedula']} | Edad: {patient.get('edad', 'N/A')} años")
+                    # Este botón ahora será índigo gracias al cambio en CSS
                     if col2.button("Ver Historial", key=patient['id'], use_container_width=True, type="primary"):
                         st.session_state.selected_patient_id = patient['id']
                         st.session_state.page = 'patient_dashboard'
@@ -309,10 +313,17 @@ def render_control_panel():
         with st.container(border=True):
             col_img, col_info = st.columns([1, 3])
             with col_img:
-                # --- MODIFICADO: Título de CEO añadido ---
+                # --- MODIFICADO: Título de CEO con mejor estilo ---
                 st.image(LOGO_URL)
-                st.caption("Joseph Javier Sánchez Acuña")
-                st.caption("**CEO de SAVA**")
+                st.markdown(
+                    """
+                    <div style="text-align: center; margin-top: 10px;">
+                        <p style="font-weight: 600; margin-bottom: 0; color: var(--text-color);">Joseph Javier Sánchez Acuña</p>
+                        <p style="font-weight: 700; color: var(--primary-color); margin-bottom: 0;">CEO de SAVA</p>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
             with col_info:
                 st.title("Joseph Javier Sánchez Acuña")
                 st.subheader("_Estudiante de Ingeniería Industrial_")
@@ -394,3 +405,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
