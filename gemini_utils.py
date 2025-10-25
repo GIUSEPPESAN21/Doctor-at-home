@@ -44,7 +44,7 @@ class GeminiUtils:
             try:
                 model = genai.GenerativeModel(model_name)
                 logger.info(f"Éxito: Modelo '{model_name}' inicializado correctamente.")
-                st.toast(f"Modelo IA conectado: {model_name}", icon="🤖")
+                # st.toast(f"Modelo IA conectado: {model_name}", icon="🤖")
                 return model
             except Exception as e:
                 logger.warning(f"Fallo: Modelo '{model_name}' no disponible. Error: {e}")
