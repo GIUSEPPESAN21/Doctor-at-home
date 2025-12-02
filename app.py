@@ -28,7 +28,7 @@ st.set_page_config(
 )
 
 # --- CONSTANTES ---
-LOGO_URL = "https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO.jpg?raw=true"
+LOGO_URL = "https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true"
 
 # ==============================================================================
 # MÓDULO 1: ESTILOS Y CONFIGURACIÓN INICIAL
