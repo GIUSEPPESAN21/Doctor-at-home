@@ -23,7 +23,7 @@ from gemini_utils import GeminiUtils
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(
     page_title="SaludIA: Asistente Clínico",
-    page_icon="https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO.jpg?raw=true", # <-- Icono de pestaña actualizado
+    page_icon="https://github.com/GIUSEPPESAN21/LOGO-SAVA/blob/main/LOGO%20COLIBRI.png?raw=true", # <-- Icono de pestaña actualizado
     layout="wide"
 )
 
