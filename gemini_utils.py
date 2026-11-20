@@ -33,11 +33,8 @@ class GeminiUtils:
         """
         # Lista de modelos actualizada para 2025, de más nuevo a más estable
         model_list = [
-            "gemini-2.0-flash-exp",
-            "gemini-1.5-flash-latest",
-            "gemini-1.5-pro-latest",
-            "gemini-1.5-flash",
-            "gemini-1.5-pro",
+            "gemini-flash-latest",      # Alias oficial de Google: siempre apunta al Flash vigente
+            "gemini-flash-lite-latest", # Alias oficial: Flash-Lite vigente (fallback)
         ]
         
         for model_name in model_list:
